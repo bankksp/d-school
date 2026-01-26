@@ -1,4 +1,5 @@
-import React, { useState, useMemo, useEffect } from 'react';
+
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { ConstructionRecord, Personnel, ConstructionStatus } from '../types';
 import { getDirectDriveImageSrc, safeParseArray, getCurrentThaiDate, buddhistToISO, isoToBuddhist, formatThaiDate, parseThaiDateForSort } from '../utils';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
@@ -210,7 +211,9 @@ const ConstructionPage: React.FC<ConstructionPageProps> = ({ currentUser, record
                                 <div className="space-y-1">
                                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">งบประมาณตามสัญญา (บาท)</label>
                                     {/* Fix: Wrap e.target.value with Number() to match number type */}
-                                    <input type="number" value={currentRecord.budget} onChange={e => setCurrentRecord({...currentRecord, budget: Number(e.target.value)})} className="w-full bg-white border border-gray-200 rounded-2xl px-6 py-4 outline-none shadow-sm font-black text-green-600" />
+                                    <input type="number" value={currentRecord.budget} 
+// FIX: The value property of an event target is a string, not a function.
+onChange={e => setCurrentRecord({...currentRecord, budget: Number(e.target.value)})} className="w-full bg-white border border-gray-200 rounded-2xl px-6 py-4 outline-none shadow-sm font-black text-green-600" />
                                 </div>
                                 <div className="space-y-1">
                                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">ความคืบหน้า (%)</label>

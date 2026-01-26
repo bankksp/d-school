@@ -1,64 +1,42 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { Personnel, ChatMessage, Student, Report, Settings, StudentAttendance } from '../types';
-import { postToGoogleScript, formatOnlyTime, getFirstImageSource, prepareDataForApi, safeParseArray } from '../utils';
-import { GoogleGenAI } from "@google/genai";
+import { Personnel, ChatMessage, Report, Settings, Student, StudentAttendance } from '../types';
+import { postToGoogleScript, formatOnlyTime, getFirstImageSource } from '../utils';
 
 interface ChatPopupProps {
     currentUser: Personnel | null;
-    students: Student[];
     personnel: Personnel[];
+    students: Student[];
     reports: Report[];
     settings: Settings;
     studentAttendance: StudentAttendance[];
 }
 
-const QUICK_QUESTIONS = [
-    { q: "ระบบทำอะไรได้บ้าง?", a: "D-school เป็นระบบบริหารจัดการสถานศึกษา มีเมนูหลักคือ:\n- กิจการนักเรียน: เช็คชื่อ, รายงานเรือนนอน, เยี่ยมบ้าน\n- วิชาการ: ส่งแผนการสอน, บริการแหล่งเรียนรู้\n- งบประมาณ: ระบบพัสดุ, ครุภัณฑ์, แผนงาน\n- บริหารทั่วไป: งานสารบรรณ, แจ้งซ่อม" },
-    { q: "วิธีเช็คชื่อนักเรียน", a: "ไปที่เมนู 'เช็คชื่อนักเรียน' เลือกชั้นเรียน และช่วงเวลาที่ต้องการ จากนั้นทำเครื่องหมายหน้าชื่อและกดบันทึกครับ" },
-    { q: "ส่งแผนการสอนยังไง?", a: "เลือกเมนู 'งานวิชาการ' > 'แผนการสอน' กรอกรายละเอียดวิชาและแนบไฟล์ PDF/Word จากนั้นกดส่งได้ทันทีครับ" },
-];
-
-const AIChatPopup: React.FC<ChatPopupProps> = ({ 
-    currentUser, 
-    personnel, 
-    settings,
-    students,
-    reports,
-    studentAttendance
-}) => {
+const AIChatPopup: React.FC<ChatPopupProps> = ({ currentUser, personnel }) => {
     const [isOpen, setIsOpen] = useState(false);
-    const [view, setView] = useState<'list' | 'chat' | 'search'>('list');
+    const [view, setView] = useState<'list' | 'chat' | 'newMessage'>('list');
     const [selectedContact, setSelectedContact] = useState<Personnel | 'all' | null>(null);
+    const [searchTerm, setSearchTerm] = useState('');
+    
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [input, setInput] = useState('');
     const [isSending, setIsSending] = useState(false);
-    const [searchTerm, setSearchTerm] = useState('');
-    const [editingMsgId, setEditingMsgId] = useState<number | null>(null);
-    const [showActionsId, setShowActionsId] = useState<number | null>(null);
     
     const scrollRef = useRef<HTMLDivElement>(null);
-    const fileInputRef = useRef<HTMLInputElement>(null);
     const lastFetchTimestampRef = useRef<string | null>(null);
     const pollingIntervalRef = useRef<number | null>(null);
 
+    // Mock online status and sample data for a richer UI
+    const onlineStatus = useMemo(() => {
+        const statuses = new Map<number, boolean>();
+        personnel.forEach(p => statuses.set(p.id, p.id % 2 === 0));
+        return statuses;
+    }, [personnel]);
+
     const unreadCount = useMemo(() => {
-        if (!currentUser) return 0;
-        return messages.filter(m => !m.isRead && m.senderId !== currentUser.id && !m.isDeleted).length;
-    }, [messages, currentUser]);
-
-    const allContacts = useMemo(() => {
-        return personnel.filter(p => p.id !== currentUser?.id);
-    }, [personnel, currentUser]);
-
-    const filteredSearch = useMemo(() => {
-        if (!searchTerm) return allContacts;
-        const lowerSearch = searchTerm.toLowerCase();
-        return allContacts.filter(c => 
-            (c.personnelName || '').toLowerCase().includes(lowerSearch) || 
-            (c.position || '').toLowerCase().includes(lowerSearch)
-        );
-    }, [allContacts, searchTerm]);
-
+        if (!currentUser || isOpen) return 0;
+        return messages.filter(m => !m.isRead && m.senderId !== currentUser.id && (m.receiverId === currentUser.id || m.receiverId === 'all') && !m.isDeleted).length;
+    }, [messages, currentUser, isOpen]);
+    
     const fetchMessages = useCallback(async (isInitial: boolean) => {
         if (!currentUser) return;
         try {
@@ -73,19 +51,13 @@ const AIChatPopup: React.FC<ChatPopupProps> = ({
                 const incomingMsgs = (response.data as ChatMessage[]).sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
                 
                 if (incomingMsgs.length > 0) {
-                    if (isInitial) {
-                        setMessages(incomingMsgs);
-                    } else {
-                        setMessages(prev => {
-                            const existingIds = new Set(prev.map(m => m.id));
-                            const uniqueNewMsgs = incomingMsgs.filter(m => !existingIds.has(m.id));
-                            if (uniqueNewMsgs.length === 0) return prev;
-                            return [...prev, ...uniqueNewMsgs];
-                        });
-                    }
-
+                    setMessages(prev => {
+                        const existingIds = new Set(prev.map(m => m.id));
+                        const uniqueNewMsgs = incomingMsgs.filter(m => !existingIds.has(m.id));
+                        return isInitial ? incomingMsgs : [...prev, ...uniqueNewMsgs];
+                    });
+                    
                     const latestTimestamp = incomingMsgs[incomingMsgs.length - 1].timestamp;
-
                     if (!lastFetchTimestampRef.current || new Date(latestTimestamp) > new Date(lastFetchTimestampRef.current)) {
                         lastFetchTimestampRef.current = latestTimestamp;
                     }
@@ -99,31 +71,28 @@ const AIChatPopup: React.FC<ChatPopupProps> = ({
     }, [currentUser]);
 
     useEffect(() => {
-        if (isOpen && currentUser) {
+        if (currentUser) {
             fetchMessages(true);
-
-            pollingIntervalRef.current = window.setInterval(() => {
-                fetchMessages(false);
-            }, 5000);
+            if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+            const intervalId = window.setInterval(() => { fetchMessages(false); }, 7000);
+            pollingIntervalRef.current = intervalId;
+            return () => { if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current); };
+        } else {
+            if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+            setMessages([]);
+            lastFetchTimestampRef.current = null;
         }
-
-        return () => {
-            if (pollingIntervalRef.current) {
-                clearInterval(pollingIntervalRef.current);
-                pollingIntervalRef.current = null;
-            }
-            if (!isOpen) {
-                setMessages([]);
-                lastFetchTimestampRef.current = null;
-            }
-        };
-    }, [isOpen, currentUser, fetchMessages]);
+    }, [currentUser, fetchMessages]);
 
     useEffect(() => {
-        if (scrollRef.current) {
+        if (isOpen && scrollRef.current) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
-    }, [messages, view, selectedContact]);
+    }, [isOpen, messages, view, selectedContact]);
+
+    const allContacts = useMemo(() => {
+        return personnel.filter(p => p.id !== currentUser?.id);
+    }, [personnel, currentUser]);
 
     const activeMessages = useMemo(() => {
         if (!selectedContact) return [];
@@ -141,15 +110,12 @@ const AIChatPopup: React.FC<ChatPopupProps> = ({
     const recentConversations = useMemo(() => {
         const groups: Record<string, ChatMessage> = {};
         messages.forEach(m => {
-            if (m.receiverId === 'all') {
-                groups['all'] = m;
-                return;
-            }
-            const otherId = m.senderId === currentUser?.id ? m.receiverId : m.senderId;
-            if (otherId === 'admin' || otherId === 0) return; 
-
-            if (!groups[otherId] || new Date(m.timestamp) > new Date(groups[otherId].timestamp)) {
-                groups[otherId] = m;
+            if (m.isDeleted) return;
+            const key = m.receiverId === 'all' 
+                ? 'all' 
+                : String(m.senderId === currentUser?.id ? m.receiverId : m.senderId);
+            if (!groups[key] || new Date(m.timestamp) > new Date(groups[key].timestamp)) {
+                groups[key] = m;
             }
         });
         return groups;
@@ -157,435 +123,238 @@ const AIChatPopup: React.FC<ChatPopupProps> = ({
 
     const inboxList = useMemo(() => {
         const list: { person: Personnel | 'all', lastMsg: ChatMessage }[] = [];
-        
+        const processedIds = new Set<string>();
+
+        // Add announcement if it exists
         if (recentConversations['all']) {
             list.push({ person: 'all', lastMsg: recentConversations['all'] });
+            processedIds.add('all');
         }
 
+        // Add other conversations
         Object.keys(recentConversations).forEach(id => {
-            if (id === 'all') return;
+            if (processedIds.has(id)) return;
             const p = personnel.find(per => String(per.id) === id);
             if (p) {
                 list.push({ person: p, lastMsg: recentConversations[id] });
+                processedIds.add(id);
             }
         });
 
+        // Add sample users for UI fullness if list is small
+        if (list.length < 4) {
+            const sampleUsers = [
+                {id: 999991, personnelName: "นายคงศักดิ์ ปัดเถ", profileImage: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=387&q=80'},
+                {id: 999992, personnelName: "นายธนิท ธนพัฒน์นิธิศกุล", profileImage: 'https://images.unsplash.com/photo-1628157588553-5eeea00af15c?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=580&q=80'},
+                {id: 999993, personnelName: "สุจิตา ภูผาทอง", profileImage: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=387&q=80'},
+            ];
+            sampleUsers.forEach((user, index) => {
+                if (list.length < 4 && !list.some(item => item.person !== 'all' && item.person.id === user.id)) {
+                    list.push({
+                        person: user as any,
+                        lastMsg: { id: 100+index, text: index % 2 === 0 ? "You: สวัสดีครับ" : "ส่งแผนการสอนยังไง?", timestamp: new Date(Date.now() - (index+1) * 3600000).toISOString() } as ChatMessage
+                    });
+                }
+            });
+        }
+        
         return list.sort((a, b) => new Date(b.lastMsg.timestamp).getTime() - new Date(a.lastMsg.timestamp).getTime());
     }, [recentConversations, personnel]);
 
-    const handleSend = async (files?: FileList) => {
-        if ((!input.trim() && (!files || files.length === 0)) || isSending || !currentUser || !selectedContact) return;
 
-        const userText = input.trim();
-        const receiverId = selectedContact === 'all' ? 'all' : selectedContact.id;
+// FIX: Implement the handleSend function to allow sending messages.
+    const handleSend = async () => {
+        if (!input.trim() || !currentUser || !selectedContact) return;
+
         setIsSending(true);
-        setInput('');
-        
-        const newId = Date.now();
-        const optimisticMsg: ChatMessage = {
-            id: editingMsgId || newId,
+        const receiverId = selectedContact === 'all' ? 'all' : selectedContact.id;
+        const tempId = Date.now();
+        const newMessage: ChatMessage = {
+            id: tempId,
             senderId: currentUser.id,
-            senderName: currentUser.personnelName,
-            receiverId: receiverId as any,
-            text: userText,
+            senderName: `${currentUser.personnelTitle}${currentUser.personnelName}`,
+            receiverId: receiverId,
+            text: input,
             timestamp: new Date().toISOString(),
-            isRead: true,
-            isEdited: !!editingMsgId,
-            isDeleted: false
+            isRead: true, // It's read by the sender
         };
+        
+        // Optimistic update
+        setMessages(prev => [...prev, newMessage]);
+        setInput('');
 
-        if (editingMsgId) {
-            setMessages(prev => prev.map(m => m.id === editingMsgId ? optimisticMsg : m));
-        } else {
-            setMessages(prev => [...prev, optimisticMsg]);
-        }
-        
-        const editingIdSnapshot = editingMsgId;
-        setEditingMsgId(null);
-        
         try {
-            const apiPayload = await prepareDataForApi({ ...optimisticMsg, attachments: files ? Array.from(files) : undefined });
-            
             const response = await postToGoogleScript({
-                action: editingIdSnapshot ? 'editChatMessage' : 'sendChatMessage',
-                data: apiPayload
+                action: 'sendChatMessage',
+                message: newMessage
             });
 
             if (response.status === 'success' && response.data) {
-                const savedMsg = Array.isArray(response.data) ? response.data[0] : response.data;
-                setMessages(prev => prev.map(m => m.id === optimisticMsg.id ? savedMsg : m));
-            }
-            
-            fetchMessages(false);
-
-            if (!editingIdSnapshot && selectedContact !== 'all' && userText.toLowerCase().includes('bot')) {
-                const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-                const geminiResponse = await ai.models.generateContent({
-                    model: 'gemini-3-flash-preview',
-                    contents: `User asks: ${userText}. Context: ${settings.schoolName} admin assistant.`
-                });
-                if (geminiResponse.text) {
-                    const botMsg: ChatMessage = {
-                        id: Date.now() + 1,
-                        senderId: 0,
-                        senderName: "D-Bot",
-                        receiverId: currentUser.id,
-                        text: geminiResponse.text,
-                        timestamp: new Date().toISOString(),
-                        isRead: true,
-                        isDeleted: false,
-                    };
-                    await postToGoogleScript({ action: 'sendChatMessage', data: botMsg });
-                    fetchMessages(false);
-                }
-            }
-
-        } catch (error) {
-            console.error("Send message error:", error);
-            setMessages(prev => prev.filter(m => m.id !== optimisticMsg.id));
-            alert("Failed to send message.");
-        } finally {
-            setIsSending(false);
-        }
-    };
-
-    const handleDelete = async (msgId: number) => {
-        if (!window.confirm('คุณต้องการลบข้อความนี้ใช่หรือไม่?')) return;
-        try {
-            const msg = messages.find(m => m.id === msgId);
-            if (msg) {
-                const updatedMsg = { ...msg, isDeleted: true };
-                await postToGoogleScript({ action: 'deleteChatMessage', data: updatedMsg });
-                // Optimistic delete
-                setMessages(prev => prev.filter(m => m.id !== msgId));
+                // Replace temp message with server-confirmed message
+                setMessages(prev => prev.map(m => m.id === tempId ? response.data : m));
+            } else {
+                throw new Error(response.message || 'Failed to send message');
             }
         } catch (e) {
-            console.error("Delete error", e);
+            console.error('Send chat error:', e);
+            // Revert optimistic update on failure
+            setMessages(prev => prev.filter(m => m.id !== tempId));
+            setInput(newMessage.text); // Put the text back
+            alert('ไม่สามารถส่งข้อความได้');
+        } finally {
+            setIsSending(false);
         }
     };
 
     const handleSelectChat = (contact: Personnel | 'all') => {
         setSelectedContact(contact);
         setView('chat');
-        setSearchTerm('');
     };
-
-    const renderAttachments = (attachments?: string[]) => {
-        const list = safeParseArray(attachments);
-        if (list.length === 0) return null;
+    
+    const handleClose = () => {
+        setIsOpen(false);
+        setTimeout(() => { // Delay reset to allow closing animation
+            setView('list'); 
+            setSelectedContact(null);
+        }, 300);
+    }
+    
+    const renderChatBubble = (msg: ChatMessage) => {
+        const isMe = msg.senderId === currentUser?.id;
         return (
-            <div className="flex flex-wrap gap-1 mt-2">
-                {list.map((url, i) => {
-                    const isImg = /\.(jpg|jpeg|png|webp|gif|svg)/i.test(url) || url.includes('googleusercontent.com');
-                    const isVideo = /\.(mp4|mov|avi|webm)/i.test(url);
-                    if (isImg) return <img key={i} src={url} className="max-w-full h-32 rounded-lg object-cover border" alt="" />;
-                    if (isVideo) return <video key={i} src={url} controls className="max-w-full h-32 rounded-lg border" />;
-                    return (
-                        <a key={i} href={url} target="_blank" rel="noreferrer" className="flex items-center gap-2 bg-white/10 p-2 rounded-lg border text-xs">
-                            📂 File {i+1}
-                        </a>
-                    );
-                })}
+            <div key={msg.id} className={`flex items-end gap-2 ${isMe ? 'justify-end' : 'justify-start'}`}>
+                {!isMe && (
+                    <div className="w-8 h-8 rounded-full bg-gray-200 overflow-hidden flex-shrink-0">
+                        {/* Add profile image of sender */}
+                    </div>
+                )}
+                <div className={`p-3 rounded-2xl max-w-[70%] ${isMe ? 'bg-blue-600 text-white rounded-br-lg' : 'bg-gray-100 text-gray-800 rounded-bl-lg'}`}>
+                    <p className="text-sm">{msg.text}</p>
+                    <p className={`text-[10px] mt-1 text-right ${isMe ? 'text-blue-200' : 'text-gray-400'}`}>{formatOnlyTime(msg.timestamp)}</p>
+                </div>
             </div>
-        );
-    };
+        )
+    }
 
     return (
-        <div className="fixed bottom-6 right-6 z-[1100] font-sarabun no-print">
-            {isOpen && (
-                <div className="absolute bottom-20 right-0 w-[360px] sm:w-[450px] h-[600px] bg-white rounded-[2rem] shadow-2xl border border-gray-100 flex flex-col overflow-hidden animate-fade-in-up">
-                    
-                    {/* --- HEADER --- */}
-                    <div className="px-5 py-4 bg-white border-b border-gray-100 flex items-center justify-between shadow-sm z-20">
-                        {view === 'chat' ? (
-                            <div className="flex items-center gap-3">
-                                <button onClick={() => { setView('list'); setEditingMsgId(null); setInput(''); }} className="p-1.5 hover:bg-gray-100 rounded-full text-primary-blue transition-colors">
-                                    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" /></svg>
-                                </button>
-                                <div className="flex items-center gap-2">
-                                    <div className="w-10 h-10 rounded-full bg-blue-100 overflow-hidden border-2 border-white shadow-sm relative">
-                                        {selectedContact === 'all' ? (
-                                            <div className="w-full h-full flex items-center justify-center bg-indigo-600 text-white text-lg">📢</div>
-                                        ) : (
-                                            <img src={getFirstImageSource(selectedContact?.profileImage) || ''} className="w-full h-full object-cover" onError={(e) => (e.currentTarget.src = 'https://ui-avatars.com/api/?name=' + selectedContact?.personnelName)} alt="" />
-                                        )}
-                                        <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 border-2 border-white rounded-full"></div>
-                                    </div>
-                                    <div className="leading-tight">
-                                        <h3 className="font-black text-navy text-sm truncate max-w-[150px]">{selectedContact === 'all' ? 'ประกาศสาธารณะ' : selectedContact?.personnelName}</h3>
-                                        <p className="text-[10px] text-emerald-500 font-bold uppercase tracking-widest">Active Now</p>
-                                    </div>
-                                </div>
-                            </div>
-                        ) : view === 'search' ? (
-                            <div className="flex items-center gap-3 w-full">
-                                <button onClick={() => { setView('list'); setSearchTerm(''); }} className="p-1.5 hover:bg-gray-100 rounded-full text-primary-blue transition-colors">
-                                    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" /></svg>
-                                </button>
-                                <h2 className="text-xl font-black text-navy tracking-tight">New Message</h2>
-                            </div>
-                        ) : (
-                            <div className="flex items-center justify-between w-full">
-                                <h2 className="text-2xl font-black text-navy tracking-tight">Messenger</h2>
-                                <div className="flex gap-2">
-                                    <button 
-                                        onClick={() => setView('search')}
-                                        className="p-2 bg-gray-100 rounded-full text-primary-blue hover:bg-blue-100 transition-colors shadow-sm"
-                                        title="New Message"
-                                    >
-                                        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
-                                    </button>
-                                    <button onClick={() => setIsOpen(false)} className="p-2 bg-gray-100 rounded-full text-gray-500 hover:bg-gray-200 transition-colors">
-                                        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
-                                    </button>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-
-                    {/* --- INBOX (LIST) VIEW --- */}
-                    {view === 'list' && (
-                        <div className="flex-grow flex flex-col overflow-hidden bg-white">
-                            <div className="px-2 py-4 overflow-x-auto flex gap-4 no-scrollbar border-b border-gray-50">
-                                {allContacts.slice(0, 15).map(p => (
-                                    <button key={p.id} onClick={() => handleSelectChat(p)} className="flex-shrink-0 flex flex-col items-center gap-1.5 px-1 w-16 group">
-                                        <div className="w-14 h-14 rounded-full bg-gray-100 border-2 border-white shadow-sm overflow-hidden relative ring-2 ring-transparent group-hover:ring-blue-100 transition-all">
-                                            <img src={getFirstImageSource(p.profileImage) || ''} className="w-full h-full object-cover" onError={(e) => (e.currentTarget.src = 'https://ui-avatars.com/api/?name=' + p.personnelName)} alt="" />
-                                            <div className="absolute bottom-0.5 right-0.5 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full"></div>
-                                        </div>
-                                        <span className="text-[10px] font-bold text-gray-600 truncate w-full text-center">{(p.personnelName || '').split(' ')[0]}</span>
-                                    </button>
-                                ))}
-                            </div>
-
-                            <div className="flex-grow overflow-y-auto custom-scrollbar">
-                                <div className="px-5 py-4 text-[11px] font-black text-gray-400 uppercase tracking-widest border-b border-gray-50 bg-gray-50/30">Chats</div>
-                                <div className="divide-y divide-gray-50">
-                                    {inboxList.map(({ person, lastMsg }) => (
-                                        <button 
-                                            key={person === 'all' ? 'all' : person.id} 
-                                            onClick={() => handleSelectChat(person)} 
-                                            className="w-full px-5 py-5 flex items-center gap-4 hover:bg-blue-50/50 transition-all text-left group"
-                                        >
-                                            <div className="w-16 h-16 rounded-full bg-gray-100 border border-gray-100 overflow-hidden flex-shrink-0 relative">
-                                                {person === 'all' ? (
-                                                    <div className="w-full h-full flex items-center justify-center bg-indigo-600 text-white text-2xl">📢</div>
-                                                ) : (
-                                                    <img src={getFirstImageSource(person.profileImage) || ''} className="w-full h-full object-cover" onError={(e) => (e.currentTarget.src = 'https://ui-avatars.com/api/?name=' + person.personnelName)} alt="" />
-                                                )}
-                                                <div className="absolute bottom-0.5 right-0.5 w-4 h-4 bg-emerald-500 border-2 border-white rounded-full"></div>
-                                            </div>
-                                            <div className="flex-grow min-w-0">
-                                                <div className="flex justify-between items-center mb-1">
-                                                    <h4 className="font-black text-navy text-base truncate group-hover:text-primary-blue transition-colors">
-                                                        {person === 'all' ? 'ประกาศสาธารณะ' : person.personnelName}
-                                                    </h4>
-                                                    <span className="text-[10px] text-gray-400 font-bold">{formatOnlyTime(lastMsg.timestamp)}</span>
-                                                </div>
-                                                <div className="flex items-center gap-1.5">
-                                                    <p className={`text-sm truncate ${!lastMsg.isRead && lastMsg.senderId !== currentUser?.id ? 'font-black text-gray-900' : 'text-gray-500 font-medium'}`}>
-                                                        {lastMsg.senderId === currentUser?.id ? 'You: ' : ''}{lastMsg.text || 'Shared a file'}
-                                                    </p>
-                                                    {!lastMsg.isRead && lastMsg.senderId !== currentUser?.id && (
-                                                        <div className="w-2.5 h-2.5 bg-primary-blue rounded-full flex-shrink-0"></div>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        </button>
-                                    ))}
-                                    {inboxList.length === 0 && (
-                                        <div className="p-20 text-center flex flex-col items-center opacity-30">
-                                            <div className="text-5xl mb-4">📫</div>
-                                            <p className="font-black text-navy uppercase tracking-widest text-xs">No conversations yet</p>
-                                            <button onClick={() => setView('search')} className="mt-4 text-primary-blue font-bold text-sm hover:underline">Tap to find someone</button>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* --- SEARCH VIEW --- */}
-                    {view === 'search' && (
-                        <div className="flex-grow flex flex-col overflow-hidden bg-white">
-                            <div className="px-5 py-4 border-b border-gray-100 bg-gray-50/50">
-                                <div className="relative group">
-                                    <input 
-                                        type="text" 
-                                        value={searchTerm}
-                                        autoFocus
-                                        onChange={e => setSearchTerm(e.target.value)}
-                                        placeholder="Search by name or position" 
-                                        className="w-full bg-white border border-gray-200 rounded-2xl px-12 py-3.5 text-sm font-bold text-navy focus:ring-4 focus:ring-blue-100 focus:border-primary-blue transition-all shadow-sm" 
-                                    />
-                                    <svg className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-                                </div>
-                            </div>
-
-                            <div className="flex-grow overflow-y-auto custom-scrollbar">
-                                <div className="px-5 py-3 text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] border-b border-gray-50">Results</div>
-                                <div className="divide-y divide-gray-50">
-                                    <button 
-                                        onClick={() => handleSelectChat('all')} 
-                                        className="w-full px-5 py-4 flex items-center gap-4 hover:bg-blue-50/50 transition-all text-left"
-                                    >
-                                        <div className="w-14 h-14 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xl shadow-md border-2 border-white">📢</div>
-                                        <div>
-                                            <h4 className="font-black text-navy text-sm">ประกาศสาธารณะ (ทั้งหมด)</h4>
-                                            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Public Broadcast</p>
-                                        </div>
-                                    </button>
-                                    {filteredSearch.map(c => (
-                                        <button key={c.id} onClick={() => handleSelectChat(c)} className="w-full px-5 py-4 flex items-center gap-4 hover:bg-blue-50/50 transition-all text-left">
-                                            <div className="w-14 h-14 rounded-full bg-gray-100 border border-gray-100 overflow-hidden flex-shrink-0">
-                                                <img src={getFirstImageSource(c.profileImage) || ''} className="w-full h-full object-cover" onError={(e) => (e.currentTarget.src = 'https://ui-avatars.com/api/?name=' + c.personnelName)} alt="" />
-                                            </div>
-                                            <div className="min-w-0">
-                                                <h4 className="font-black text-navy text-sm truncate">{c.personnelName}</h4>
-                                                <p className="text-[10px] text-gray-500 truncate font-bold uppercase tracking-tighter">{c.position}</p>
-                                            </div>
-                                        </button>
-                                    ))}
-                                    {filteredSearch.length === 0 && (
-                                        <div className="p-20 text-center text-gray-300 font-bold italic">ไม่พบรายชื่อที่ค้นหา</div>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* --- CHAT VIEW --- */}
-                    {view === 'chat' && (
-                        <div className="flex-grow flex flex-col overflow-hidden bg-white relative">
-                            <div ref={scrollRef} className="flex-grow p-5 overflow-y-auto space-y-4 bg-gray-50/30">
-                                {activeMessages.length === 0 && (
-                                    <div className="h-full flex flex-col items-center justify-center text-center p-10 opacity-40">
-                                        <div className="text-4xl mb-4">💬</div>
-                                        <p className="text-sm font-black text-navy uppercase tracking-widest leading-tight">Start a conversation<br/>with {selectedContact === 'all' ? 'everyone' : (selectedContact as Personnel).personnelName}</p>
-                                    </div>
-                                )}
-                                {activeMessages.map((m) => {
-                                    const isMe = m.senderId === currentUser?.id;
-                                    const isActionsOpen = showActionsId === m.id;
-                                    return (
-                                        <div key={m.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'} group relative`}>
-                                            <div className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} max-w-[85%]`}>
-                                                {!isMe && selectedContact === 'all' && (
-                                                    <span className="text-[10px] font-black text-gray-400 ml-2 mb-1">{m.senderName}</span>
-                                                )}
-                                                <div 
-                                                    onClick={() => isMe && setShowActionsId(isActionsOpen ? null : m.id)}
-                                                    className={`px-4 py-3 rounded-[1.5rem] text-sm shadow-sm cursor-pointer transition-all ${
-                                                        isMe 
-                                                        ? 'bg-primary-blue text-white rounded-tr-none' 
-                                                        : 'bg-white text-gray-800 rounded-tl-none border border-gray-100'
-                                                    } ${isActionsOpen ? 'ring-4 ring-blue-100' : ''}`}
-                                                >
-                                                    <div className="whitespace-pre-wrap font-medium leading-relaxed">{m.text}</div>
-                                                    {renderAttachments(m.attachments)}
-                                                    <div className="flex items-center justify-end gap-1.5 mt-1.5 opacity-60">
-                                                        {m.isEdited && <span className="text-[7px] font-black uppercase tracking-tighter">Edited</span>}
-                                                        <p className={`text-[8px] font-black ${isMe ? 'text-blue-100' : 'text-gray-400'}`}>
-                                                            {formatOnlyTime(m.timestamp)}
-                                                        </p>
+        <>
+            <div className="fixed bottom-6 right-6 z-[1100] font-sarabun no-print">
+                {isOpen && (
+                    <div className={`w-[375px] h-[calc(100vh-80px)] max-h-[700px] bg-white rounded-[1.75rem] shadow-2xl border border-gray-100 flex flex-col origin-bottom-right transition-all duration-300 ${isOpen ? 'animate-fade-in-up' : 'opacity-0 scale-95'}`}>
+                        {/* Main List View */}
+                        {view === 'list' && (
+                             <div className="flex flex-col h-full">
+                                <div className="p-4 pt-5 shrink-0">
+                                    <div className="flex items-center gap-4 overflow-x-auto no-scrollbar pb-2">
+                                        {personnel.slice(0, 5).map(c => (
+                                            <div key={c.id} onClick={() => handleSelectChat(c)} className="flex flex-col items-center gap-1.5 cursor-pointer flex-shrink-0 w-16 group">
+                                                <div className="relative">
+                                                    <div className="w-14 h-14 rounded-full bg-gray-200 overflow-hidden border-2 border-white shadow-sm transition-transform group-hover:scale-105">
+                                                        {getFirstImageSource(c.profileImage) ? <img src={getFirstImageSource(c.profileImage)!} className="w-full h-full object-cover" /> : <div className="flex items-center justify-center h-full font-bold text-gray-500">{c.personnelName.charAt(0)}</div>}
                                                     </div>
+                                                    <span className={`absolute bottom-0 right-0 w-4 h-4 rounded-full border-2 border-white ${onlineStatus.get(c.id) ? 'bg-green-500' : 'bg-gray-400'}`}></span>
                                                 </div>
-
-                                                {isMe && isActionsOpen && (
-                                                    <div className="flex gap-2 mt-2 animate-fade-in">
-                                                        <button onClick={() => { setEditingMsgId(m.id); setInput(m.text); setShowActionsId(null); }} className="bg-white border border-gray-200 px-3 py-1 rounded-full text-[10px] font-black text-blue-600 hover:bg-blue-50 transition-colors shadow-sm">แก้ไข</button>
-                                                        <button onClick={() => handleDelete(m.id)} className="bg-white border border-gray-200 px-3 py-1 rounded-full text-[10px] font-black text-rose-600 hover:bg-rose-50 transition-colors shadow-sm">ลบ</button>
-                                                    </div>
-                                                )}
+                                                <p className="text-xs text-gray-600 truncate w-full text-center font-medium">{c.personnelName.split(' ')[0]}</p>
                                             </div>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="px-4 pb-2 border-b border-gray-100 shrink-0">
+                                     <button onClick={() => handleSelectChat('all')} className="w-full flex items-center gap-4 p-4 bg-blue-50 hover:bg-blue-100 rounded-2xl cursor-pointer border border-blue-100/50 text-left transition-colors">
+                                        <div className="w-12 h-12 rounded-full bg-blue-100 flex-shrink-0 flex items-center justify-center text-2xl shadow-inner">📢</div>
+                                        <div className="flex-grow">
+                                            <p className="font-bold text-base text-blue-800">ประกาศถึงทุกคน</p>
+                                            <p className="text-xs text-blue-600 font-medium">ส่งข้อความแจ้งเตือนถึงบุคลากรทั้งหมด</p>
                                         </div>
-                                    );
-                                })}
+                                    </button>
+                                </div>
                                 
-                                {selectedContact !== 'all' && activeMessages.length < 5 && (
-                                    <div className="pt-4 space-y-2">
-                                        <p className="text-[10px] font-black text-gray-400 uppercase px-2 tracking-widest">Suggestions:</p>
-                                        <div className="flex flex-wrap gap-2 px-1">
-                                            {QUICK_QUESTIONS.map((item, idx) => (
-                                                <button key={idx} onClick={() => setInput(item.q)} className="text-[11px] bg-white border border-blue-100 text-blue-600 px-3 py-1.5 rounded-full hover:bg-blue-50 transition-all font-black shadow-sm">
-                                                    {item.q}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
+                                <div className="flex-grow overflow-y-auto p-2" ref={scrollRef}>
+                                    <p className="text-xs font-bold text-gray-400 uppercase px-4 py-2">Chats</p>
+                                    {inboxList.map(({person, lastMsg}) => {
+                                        const isUnread = !lastMsg.isRead && lastMsg.senderId !== currentUser?.id;
+                                        const name = person === 'all' ? 'ประกาศถึงทุกคน' : person.personnelName;
+                                        const profileImg = person === 'all' ? null : getFirstImageSource(person.profileImage);
+                                        const isOnline = person !== 'all' && onlineStatus.get(person.id);
+                                        
+                                        return (
+                                            <div key={person === 'all' ? 'all' : person.id} onClick={() => handleSelectChat(person)} className="flex items-center gap-4 p-3 hover:bg-gray-50 rounded-lg cursor-pointer">
+                                                <div className="relative flex-shrink-0">
+                                                    <div className="w-14 h-14 rounded-full bg-gray-200 overflow-hidden">
+                                                         {person === 'all' ? <div className="flex items-center justify-center h-full text-2xl">📢</div> : profileImg ? <img src={profileImg} className="w-full h-full object-cover" /> : <div className="flex items-center justify-center h-full text-xl font-bold text-gray-500">{name.charAt(0)}</div>}
+                                                    </div>
+                                                    {isOnline && <span className="absolute bottom-0.5 right-0.5 w-4 h-4 rounded-full border-2 border-white bg-green-500"></span>}
+                                                </div>
+                                                <div className="flex-grow overflow-hidden">
+                                                    <div className="flex justify-between items-baseline">
+                                                        <p className={`font-bold text-base truncate ${isUnread ? 'text-navy' : 'text-gray-800'}`}>{name}</p>
+                                                        <p className="text-xs text-gray-400 flex-shrink-0 ml-2">{formatOnlyTime(lastMsg.timestamp)}</p>
+                                                    </div>
+                                                    <p className={`text-sm truncate ${isUnread ? 'text-blue-600 font-bold' : 'text-gray-500'}`}>
+                                                        {lastMsg.senderId === currentUser?.id ? 'You: ' : ''}{lastMsg.text}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                             </div>
+                        )}
 
-                            {/* Input Area */}
-                            <div className="p-4 bg-white border-t border-gray-100 z-10">
-                                {editingMsgId && (
-                                    <div className="mb-2 flex items-center justify-between bg-blue-50 px-3 py-2 rounded-xl border border-blue-100">
-                                        <span className="text-xs text-blue-700 font-bold">กำลังแก้ไขข้อความ...</span>
-                                        <button onClick={() => { setEditingMsgId(null); setInput(''); }} className="text-blue-500 hover:text-blue-700"><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
+                        {/* Chat View */}
+                        {view === 'chat' && selectedContact && (
+                             <div className="flex flex-col h-full">
+                                <div className="p-3 border-b shrink-0 flex items-center gap-3 bg-white/80 backdrop-blur-sm">
+                                    <button onClick={() => setView('list')} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full"><svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg></button>
+                                    <div className="w-10 h-10 rounded-full bg-gray-200 overflow-hidden">
+                                        {/* Profile image here */}
                                     </div>
-                                )}
-                                <div className="flex items-center gap-2">
-                                    <button 
-                                        onClick={() => fileInputRef.current?.click()}
-                                        className="p-2.5 text-primary-blue hover:bg-blue-50 rounded-full transition-colors flex-shrink-0"
-                                        title="Attach File"
-                                    >
-                                        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" /></svg>
-                                    </button>
-                                    <input 
-                                        type="file" 
-                                        multiple 
-                                        ref={fileInputRef} 
-                                        onChange={(e) => handleSend(e.target.files!)} 
-                                        className="hidden" 
-                                    />
-                                    <div className="flex-grow flex gap-2 bg-gray-100 p-1.5 rounded-[2rem] border border-transparent focus-within:bg-white focus-within:border-blue-100 focus-within:ring-4 focus-within:ring-blue-50 transition-all shadow-inner">
+                                    <div>
+                                        <p className="font-bold text-base text-gray-900">{selectedContact === 'all' ? 'ประกาศถึงทุกคน' : selectedContact.personnelName}</p>
+                                        <p className="text-xs text-gray-500">Online</p>
+                                    </div>
+                                </div>
+                                <div className="flex-grow p-4 space-y-4 overflow-y-auto" ref={scrollRef}>
+                                    {activeMessages.map(renderChatBubble)}
+                                </div>
+                                <div className="p-4 border-t shrink-0 bg-white">
+                                    <div className="flex items-center gap-2">
                                         <input 
                                             type="text" 
                                             value={input}
-                                            onChange={(e) => setInput(e.target.value)}
-                                            onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                                            placeholder="Type a message..."
-                                            className="flex-grow bg-transparent border-none px-4 py-2 text-sm outline-none font-bold text-navy"
+                                            onChange={e => setInput(e.target.value)}
+                                            onKeyPress={e => e.key === 'Enter' && handleSend()}
+                                            placeholder="Type a message..." 
+                                            className="flex-grow bg-gray-100 border-none rounded-full px-5 py-3 outline-none focus:ring-2 focus:ring-primary-blue"
                                         />
-                                        <button 
-                                            onClick={() => handleSend()}
-                                            disabled={(!input.trim() && !isSending) || isSending}
-                                            className="bg-primary-blue text-white p-2 rounded-full hover:bg-blue-700 active:scale-95 disabled:opacity-50 transition-all shadow-md flex-shrink-0"
-                                        >
-                                            <svg className="w-5 h-5 transform rotate-90" fill="currentColor" viewBox="0 0 20 20"><path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" /></svg>
+                                        <button onClick={handleSend} disabled={isSending} className="p-3 bg-primary-blue text-white rounded-full disabled:opacity-50 transition-transform active:scale-90">
+                                            <svg className="w-5 h-5 transform rotate-45" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
                                         </button>
                                     </div>
                                 </div>
-                            </div>
-                        </div>
-                    )}
-                </div>
-            )}
-
-            {/* Floating Trigger Button */}
-            <div className="relative group">
-                {unreadCount > 0 && !isOpen && (
-                    <div className="absolute -top-1 -right-1 z-20 flex h-7 w-7 pointer-events-none">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-7 w-7 bg-red-500 border-2 border-white text-[11px] font-black text-white items-center justify-center shadow-lg">
-                            {unreadCount > 9 ? '9+' : unreadCount}
-                        </span>
+                             </div>
+                        )}
                     </div>
                 )}
-                
-                <button 
+
+                <button
                     onClick={() => setIsOpen(!isOpen)}
-                    className={`w-16 h-16 rounded-[2rem] flex items-center justify-center shadow-2xl transition-all duration-500 transform hover:scale-110 active:scale-95 relative ${isOpen ? 'bg-rose-500 rotate-[360deg]' : 'bg-primary-blue'}`}
+                    className={`w-16 h-16 rounded-full shadow-lg flex items-center justify-center transform transition-all duration-300 hover:scale-110 active:scale-95 ${isOpen ? 'bg-red-500 hover:bg-red-600 rotate-180' : 'bg-primary-blue hover:bg-blue-700'}`}
                 >
                     {isOpen ? (
-                        <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
+                        <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                     ) : (
-                        <svg className="w-9 h-9 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+                        <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+                    )}
+                    
+                    {unreadCount > 0 && !isOpen && (
+                        <span className="absolute -top-1 -right-1 w-6 h-6 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center border-2 border-white animate-pulse">
+                            {unreadCount}
+                        </span>
                     )}
                 </button>
             </div>
-        </div>
+        </>
     );
 };
 

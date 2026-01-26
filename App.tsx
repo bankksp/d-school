@@ -56,8 +56,27 @@ const safeJsonParse = (input: any) => {
     return input;
 };
 
+// New helper for routing
+const getPageFromHash = (): Page => {
+    const hash = window.location.hash.substring(1);
+    const validPages: Page[] = [
+        'stats', 'attendance', 'attendance_personnel', 'reports', 'students', 
+        'personnel', 'personnel_duty', 'personnel_leave', 'personnel_achievements',
+        'admin', 'profile', 'academic_plans', 'academic_service', 'finance_supplies',
+        'finance_projects', 'durable_goods', 'personnel_report', 'personnel_salary_report',
+        'personnel_sar', 'general_docs', 'general_repair', 'general_certs',
+        'general_construction', 'general_nutrition', 'student_home_visit', 
+        'student_sdq', 'workflow_docs'
+    ];
+    if (validPages.includes(hash as Page)) {
+        return hash as Page;
+    }
+    return 'stats';
+};
+
+
 const App: React.FC = () => {
-    const [currentPage, setCurrentPage] = useState<Page>('stats');
+    const [currentPage, setCurrentPage] = useState<Page>(getPageFromHash);
     const [isSaving, setIsSaving] = useState(false);
     const [isLoading, setIsLoading] = useState(true); // Set to true initially for dashboard load
     const [isSyncing, setIsSyncing] = useState(false); 
@@ -228,31 +247,30 @@ const App: React.FC = () => {
 
         const getActionAndSetter = () => {
             switch (page) {
-                case 'students': return students.length === 0 ? { action: 'getStudents', setter: setStudents } : null;
-                case 'personnel': return personnel.length === 0 ? { action: 'getPersonnel', setter: setPersonnel } : null;
-                case 'reports': return reports.length === 0 ? { action: 'getReports', setter: setReports } : null;
+                case 'students': return { action: 'getStudents', setter: setStudents };
+                case 'personnel': return { action: 'getPersonnel', setter: setPersonnel };
+                case 'reports': return { action: 'getReports', setter: setReports };
                 case 'attendance': case 'attendance_personnel':
-                     return (studentAttendance.length === 0 || personnelAttendance.length === 0) 
-                     ? { action: 'getAttendanceData', setter: (d: any) => { setStudentAttendance(d.studentAttendance || []); setPersonnelAttendance(d.personnelAttendance || []); } } : null;
-                case 'personnel_duty': return dutyRecords.length === 0 ? { action: 'getDutyRecords', setter: setDutyRecords } : null;
-                case 'personnel_leave': return leaveRecords.length === 0 ? { action: 'getLeaveRecords', setter: setLeaveRecords } : null;
-                case 'personnel_achievements': return achievements.length === 0 ? { action: 'getAchievements', setter: setAchievements } : null;
-                case 'academic_plans': return academicPlans.length === 0 ? { action: 'getAcademicPlans', setter: setAcademicPlans } : null;
-                case 'academic_service': return serviceRecords.length === 0 ? { action: 'getServiceRecords', setter: setServiceRecords } : null;
-                case 'finance_supplies': return procurementRecords.length === 0 ? { action: 'getSupplyRequests', setter: setProcurementRecords } : null;
-                case 'finance_projects': return projectProposals.length === 0 ? { action: 'getProjectProposals', setter: setProjectProposals } : null;
-                case 'durable_goods': return durableGoods.length === 0 ? { action: 'getDurableGoods', setter: setDurableGoods } : null;
-                case 'personnel_report': return performanceReports.length === 0 ? { action: 'getPerformanceReports', setter: setPerformanceReports } : null;
-                case 'personnel_salary_report': return salaryPromotionReports.length === 0 ? { action: 'getSalaryPromotionReports', setter: setSalaryPromotionReports } : null;
-                case 'personnel_sar': return sarReports.length === 0 ? { action: 'getSarReports', setter: setSarReports } : null;
-                case 'general_docs': return documents.length === 0 ? { action: 'getGeneralDocuments', setter: setDocuments } : null;
-                case 'general_repair': return maintenanceRequests.length === 0 ? { action: 'getMaintenanceRequests', setter: setMaintenanceRequests } : null;
-                case 'general_certs': return (certificateProjects.length === 0 || certificateRequests.length === 0) ? { action: 'getCertificateData', setter: (d: any) => { setCertificateProjects(d.projects || []); setCertificateRequests(d.requests || []); } } : null;
-                case 'general_construction': return constructionRecords.length === 0 ? { action: 'getConstructionRecords', setter: setConstructionRecords } : null;
-                case 'general_nutrition': return mealPlans.length === 0 ? { action: 'getNutritionData', setter: (d: any) => { setMealPlans(d.mealPlans || []); setIngredients(d.ingredients || DEFAULT_INGREDIENTS); } } : null;
-                case 'student_home_visit': return homeVisits.length === 0 ? { action: 'getHomeVisits', setter: setHomeVisits } : null;
-                case 'student_sdq': return sdqRecords.length === 0 ? { action: 'getSdqRecords', setter: setSdqRecords } : null;
-                case 'workflow_docs': return workflowDocuments.length === 0 ? { action: 'getWorkflowDocs', setter: setWorkflowDocuments } : null;
+                     return { action: 'getAttendanceData', setter: (d: any) => { setStudentAttendance(d.studentAttendance || []); setPersonnelAttendance(d.personnelAttendance || []); } };
+                case 'personnel_duty': return { action: 'getDutyRecords', setter: setDutyRecords };
+                case 'personnel_leave': return { action: 'getLeaveRecords', setter: setLeaveRecords };
+                case 'personnel_achievements': return { action: 'getAchievements', setter: setAchievements };
+                case 'academic_plans': return { action: 'getAcademicPlans', setter: setAcademicPlans };
+                case 'academic_service': return { action: 'getServiceRecords', setter: setServiceRecords };
+                case 'finance_supplies': return { action: 'getSupplyRequests', setter: setProcurementRecords };
+                case 'finance_projects': return { action: 'getProjectProposals', setter: setProjectProposals };
+                case 'durable_goods': return { action: 'getDurableGoods', setter: setDurableGoods };
+                case 'personnel_report': return { action: 'getPerformanceReports', setter: setPerformanceReports };
+                case 'personnel_salary_report': return { action: 'getSalaryPromotionReports', setter: setSalaryPromotionReports };
+                case 'personnel_sar': return { action: 'getSarReports', setter: setSarReports };
+                case 'general_docs': return { action: 'getGeneralDocuments', setter: setDocuments };
+                case 'general_repair': return { action: 'getMaintenanceRequests', setter: setMaintenanceRequests };
+                case 'general_certs': return { action: 'getCertificateData', setter: (d: any) => { setCertificateProjects(d.projects || []); setCertificateRequests(d.requests || []); } };
+                case 'general_construction': return { action: 'getConstructionRecords', setter: setConstructionRecords };
+                case 'general_nutrition': return { action: 'getNutritionData', setter: (d: any) => { setMealPlans(d.mealPlans || []); setIngredients(d.ingredients || DEFAULT_INGREDIENTS); } };
+                case 'student_home_visit': return { action: 'getHomeVisits', setter: setHomeVisits };
+                case 'student_sdq': return { action: 'getSdqRecords', setter: setSdqRecords };
+                case 'workflow_docs': return { action: 'getWorkflowDocs', setter: setWorkflowDocuments };
                 default: return null;
             }
         };
@@ -272,8 +290,43 @@ const App: React.FC = () => {
         } finally {
             setIsLoading(false);
         }
-    }, [isAuthenticated, students, personnel, reports, studentAttendance, personnelAttendance, dutyRecords, leaveRecords, achievements, academicPlans, serviceRecords, procurementRecords, projectProposals, durableGoods, performanceReports, salaryPromotionReports, sarReports, documents, maintenanceRequests, certificateProjects, certificateRequests, constructionRecords, mealPlans, homeVisits, sdqRecords, workflowDocuments]);
-
+    }, [isAuthenticated]);
+    
+    // Effect to handle navigation consequences (data fetching, URL update, UI changes)
+    useEffect(() => {
+        if (isAuthenticated) {
+            if (currentPage !== 'stats') {
+                fetchDataForPage(currentPage);
+            }
+        }
+    
+        if (window.location.hash.substring(1) !== currentPage) {
+            window.location.hash = currentPage;
+        }
+    
+        setIsSidebarOpen(false);
+        if (settings.autoHideSidebar) {
+            setIsDesktopSidebarOpen(false);
+        }
+    }, [currentPage, isAuthenticated, fetchDataForPage, settings.autoHideSidebar]);
+    
+    // Effect to handle URL changes from browser history and initial load
+    useEffect(() => {
+        const handleHashChange = () => {
+            setCurrentPage(getPageFromHash());
+        };
+        window.addEventListener('hashchange', handleHashChange);
+        return () => window.removeEventListener('hashchange', handleHashChange);
+    }, []);
+    
+    // New simplified navigation function
+    const navigateTo = (page: Page) => {
+        if (page === 'admin' && currentUser?.role !== 'admin') {
+            alert('เฉพาะผู้ดูแลระบบ (Admin) เท่านั้น');
+            return;
+        }
+        setCurrentPage(page);
+    };
 
     const handleSaveAttendance = async (t: 'student' | 'personnel', d: any) => { 
         setIsSaving(true);
@@ -316,7 +369,7 @@ const App: React.FC = () => {
             setSettings(savedSettings);
             
             if (redirect) { 
-                setCurrentPage('stats'); 
+                navigateTo('stats'); 
                 alert('บันทึกการตั้งค่าเรียบร้อยแล้ว'); 
             }
         } catch (error) { 
@@ -347,7 +400,7 @@ const App: React.FC = () => {
         setIsAuthenticated(false);
         setHasInitialData(false);
         localStorage.removeItem('dschool_user');
-        setCurrentPage('stats');
+        navigateTo('stats');
         setReports([]); setStudents([]); setPersonnel([]);
     };
 
@@ -514,7 +567,7 @@ const App: React.FC = () => {
             case 'personnel':
                 return <PersonnelPage personnel={personnel} positions={settings.positions} onAddPersonnel={() => { setEditingPersonnel(null); setIsPersonnelModalOpen(true); }} onEditPersonnel={(p) => { setEditingPersonnel(p); setIsPersonnelModalOpen(true); }} onViewPersonnel={(p) => setViewingPersonnel(p)} onDeletePersonnel={(ids) => handleGenericDelete('deletePersonnel', ids, setPersonnel)} currentUser={currentUser} />;
             case 'admin':
-                return <AdminDashboard settings={settings} onSave={handleSaveAdminSettings} onExit={() => setCurrentPage('stats')} isSaving={isSaving} />
+                return <AdminDashboard settings={settings} onSave={handleSaveAdminSettings} onExit={() => navigateTo('stats')} isSaving={isSaving} />
             case 'profile':
                 return currentUser ? (
                     <ProfilePage user={currentUser} onSave={(p) => handleGenericSave('updatePersonnel', p, setPersonnel)} isSaving={isSaving} />
@@ -656,22 +709,6 @@ const App: React.FC = () => {
             />
         );
     }
-
-    const navigateTo = async (page: Page) => {
-        if (page === 'admin' && currentUser?.role !== 'admin') {
-            alert('เฉพาะผู้ดูแลระบบ (Admin) เท่านั้น');
-            return;
-        }
-
-        // Fetch data for the new page if it's not already loaded
-        await fetchDataForPage(page);
-
-        setCurrentPage(page);
-        setIsSidebarOpen(false); 
-        if (settings.autoHideSidebar) {
-            setIsDesktopSidebarOpen(false);
-        }
-    };
 
     const handleSidebarMouseEnter = () => {
         if (settings.autoHideSidebar) {

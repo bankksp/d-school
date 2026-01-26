@@ -30,7 +30,7 @@ const SARReportModal: React.FC<SARReportModalProps> = ({ onSave, onClose, isSavi
                 file: [],
                 status: 'pending',
                 personnelId: currentUser.id,
-                name: `${title}${currentUser.personnelName}`,
+                name: `${title} ${currentUser.personnelName}`,
                 position: currentUser.position,
                 submissionDate: getCurrentThaiDate(),
             });
@@ -324,8 +324,7 @@ const PersonnelSARPage: React.FC<PersonnelSARPageProps> = ({
                     <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-100">
                         {selectedIds.size > 0 && isAdminOrPro && <div className="mb-4 flex justify-end"><button onClick={handleDelete} className="bg-red-500 text-white px-3 py-1 rounded text-sm font-bold">ลบ {selectedIds.size} รายการ</button></div>}
                         
-                        {/* Table for Desktop */}
-                        <div className="hidden md:block overflow-x-auto rounded-lg border">
+                        <div className="overflow-x-auto rounded-lg border">
                             <table className="w-full text-sm">
                                 <thead className="bg-gray-50 text-gray-600">
                                     <tr>
@@ -339,7 +338,7 @@ const PersonnelSARPage: React.FC<PersonnelSARPageProps> = ({
                                         <th className="p-3 text-center whitespace-nowrap">จัดการ</th>
                                     </tr>
                                 </thead>
-                                <tbody className="divide-y">
+                                <tbody className="divide-y divide-gray-100">
                                     {filteredReports.map(r => (
                                         <tr key={r.id} className="hover:bg-gray-50">
                                             <td className="p-3"><input type="checkbox" className="rounded" checked={selectedIds.has(r.id)} onChange={() => {const next = new Set(selectedIds); if (next.has(r.id)) next.delete(r.id); else next.add(r.id); setSelectedIds(next);}} /></td>
@@ -372,58 +371,6 @@ const PersonnelSARPage: React.FC<PersonnelSARPageProps> = ({
                                     ))}
                                 </tbody>
                             </table>
-                        </div>
-                        
-                        {/* Cards for Mobile */}
-                        <div className="md:hidden space-y-4">
-                            {filteredReports.map(r => (
-                                <div key={r.id} className={`p-4 rounded-lg border-2 ${selectedIds.has(r.id) ? 'border-primary-blue bg-blue-50/50' : 'bg-gray-50 border-gray-100'}`}>
-                                    <div className="flex justify-between items-start">
-                                        <div>
-                                            <p className="font-bold text-navy">{r.name}</p>
-                                            <p className="text-xs text-gray-500">{r.position}</p>
-                                        </div>
-                                        <input type="checkbox" className="rounded mt-1 flex-shrink-0" checked={selectedIds.has(r.id)} onChange={() => {const next = new Set(selectedIds); if (next.has(r.id)) next.delete(r.id); else next.add(r.id); setSelectedIds(next);}} />
-                                    </div>
-                                    <div className="mt-3 pt-3 border-t border-gray-200 text-xs space-y-2">
-                                        <div className="flex justify-between">
-                                            <span className="font-semibold text-gray-600">ปีการศึกษา:</span>
-                                            <span className="font-bold">{r.academicYear}</span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                            <span className="font-semibold text-gray-600">วันที่ส่ง:</span>
-                                            <span>{formatThaiDate(r.submissionDate)}</span>
-                                        </div>
-                                        <div className="flex justify-between items-center mt-2">
-                                            <span className="font-semibold text-gray-600">สถานะ:</span>
-                                            {isAdminOrPro ? (
-                                                <select 
-                                                    value={r.status} 
-                                                    onChange={(e) => handleStatusUpdate(r.id, e.target.value as SARReport['status'])}
-                                                    onClick={(e) => e.stopPropagation()}
-                                                    className={`text-xs font-bold border-2 rounded-full px-2 py-1 outline-none appearance-none focus:ring-2 focus:ring-offset-1
-                                                        ${r.status === 'approved' ? 'bg-green-100 text-green-700 border-green-200 focus:ring-green-400' :
-                                                          r.status === 'needs_edit' ? 'bg-red-100 text-red-700 border-red-200 focus:ring-red-400' :
-                                                          'bg-yellow-100 text-yellow-700 border-yellow-200 focus:ring-yellow-400'}`}
-                                                >
-                                                    <option value="pending">รอตรวจ</option>
-                                                    <option value="approved">ผ่าน</option>
-                                                    <option value="needs_edit">ไม่ผ่าน</option>
-                                                </select>
-                                            ) : (
-                                                getStatusBadge(r.status)
-                                            )}
-                                        </div>
-                                    </div>
-                                    <div className="flex justify-between items-center mt-3 pt-3 border-t border-gray-200">
-                                         <a href={getDriveViewUrl(safeParseArray(r.file)[0])} target="_blank" rel="noreferrer" className="bg-blue-100 text-blue-700 text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-1">
-                                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-                                            ดูไฟล์
-                                        </a>
-                                         <button onClick={() => handleOpenModal(r)} className="bg-amber-100 text-amber-700 text-xs font-bold px-3 py-1.5 rounded-lg">ดู/แก้ไข</button>
-                                    </div>
-                                </div>
-                            ))}
                         </div>
 
                         {filteredReports.length === 0 && <div className="text-center text-gray-500 py-8">ไม่พบข้อมูล</div>}
