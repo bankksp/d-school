@@ -1,14 +1,10 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { Personnel, ChatMessage, Report, Settings, Student, StudentAttendance } from '../types';
-import { postToGoogleScript, formatOnlyTime, getFirstImageSource } from '../utils';
+import { Personnel, ChatMessage } from '../types';
+import { postToGoogleScript, formatOnlyTime, getFirstImageSource, prepareDataForApi, safeParseArray } from '../utils';
 
 interface ChatPopupProps {
     currentUser: Personnel | null;
     personnel: Personnel[];
-    students: Student[];
-    reports: Report[];
-    settings: Settings;
-    studentAttendance: StudentAttendance[];
 }
 
 const AIChatPopup: React.FC<ChatPopupProps> = ({ currentUser, personnel }) => {
@@ -19,18 +15,37 @@ const AIChatPopup: React.FC<ChatPopupProps> = ({ currentUser, personnel }) => {
     
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [input, setInput] = useState('');
+    const [attachment, setAttachment] = useState<File | null>(null);
+    const [attachmentPreview, setAttachmentPreview] = useState<string | null>(null);
     const [isSending, setIsSending] = useState(false);
     
     const scrollRef = useRef<HTMLDivElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const cameraInputRef = useRef<HTMLInputElement>(null);
     const lastFetchTimestampRef = useRef<string | null>(null);
     const pollingIntervalRef = useRef<number | null>(null);
 
-    // Mock online status and sample data for a richer UI
-    const onlineStatus = useMemo(() => {
-        const statuses = new Map<number, boolean>();
-        personnel.forEach(p => statuses.set(p.id, p.id % 2 === 0));
-        return statuses;
+    const [onlineStatus, setOnlineStatus] = useState<Map<number, boolean>>(new Map());
+
+    useEffect(() => {
+        const updateStatuses = () => {
+            if (!personnel || personnel.length === 0) return;
+            const newStatuses = new Map<number, boolean>();
+            personnel.forEach(p => {
+                // ~30% chance of being online to make it look less crowded
+                newStatuses.set(p.id, Math.random() < 0.3);
+            });
+            setOnlineStatus(newStatuses);
+        };
+
+        updateStatuses(); // Initial set
+
+        // Update every 30 seconds to simulate live changes
+        const intervalId = setInterval(updateStatuses, 30000);
+
+        return () => clearInterval(intervalId);
     }, [personnel]);
+
 
     const unreadCount = useMemo(() => {
         if (!currentUser || isOpen) return 0;
@@ -72,9 +87,9 @@ const AIChatPopup: React.FC<ChatPopupProps> = ({ currentUser, personnel }) => {
 
     useEffect(() => {
         if (currentUser) {
-            fetchMessages(true);
+            fetchMessages(true); // Initial fetch
             if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
-            const intervalId = window.setInterval(() => { fetchMessages(false); }, 7000);
+            const intervalId = window.setInterval(() => fetchMessages(false), 5000); // Poll every 5 seconds
             pollingIntervalRef.current = intervalId;
             return () => { if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current); };
         } else {
@@ -85,8 +100,27 @@ const AIChatPopup: React.FC<ChatPopupProps> = ({ currentUser, personnel }) => {
     }, [currentUser, fetchMessages]);
 
     useEffect(() => {
+        if (attachment) {
+            if (attachment.type.startsWith('image/')) {
+                setAttachmentPreview(URL.createObjectURL(attachment));
+            } else {
+                setAttachmentPreview(null); // No preview for non-image files
+            }
+        } else {
+            setAttachmentPreview(null);
+        }
+
+        return () => {
+            if (attachmentPreview) URL.revokeObjectURL(attachmentPreview);
+        };
+    }, [attachment]);
+
+
+    useEffect(() => {
         if (isOpen && scrollRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+            setTimeout(() => {
+                scrollRef.current!.scrollTop = scrollRef.current!.scrollHeight;
+            }, 100);
         }
     }, [isOpen, messages, view, selectedContact]);
 
@@ -95,114 +129,97 @@ const AIChatPopup: React.FC<ChatPopupProps> = ({ currentUser, personnel }) => {
     }, [personnel, currentUser]);
 
     const activeMessages = useMemo(() => {
-        if (!selectedContact) return [];
+        if (!selectedContact || !currentUser) return [];
         if (selectedContact === 'all') {
             return messages.filter(m => m.receiverId === 'all' && !m.isDeleted);
         }
         return messages.filter(m => 
             !m.isDeleted && (
-                (m.senderId === currentUser?.id && m.receiverId === selectedContact.id) ||
-                (m.senderId === selectedContact.id && m.receiverId === currentUser?.id)
+                (m.senderId === currentUser.id && m.receiverId === selectedContact.id) ||
+                (m.senderId === selectedContact.id && m.receiverId === currentUser.id)
             )
         );
     }, [messages, selectedContact, currentUser]);
 
-    const recentConversations = useMemo(() => {
-        const groups: Record<string, ChatMessage> = {};
-        messages.forEach(m => {
-            if (m.isDeleted) return;
-            const key = m.receiverId === 'all' 
-                ? 'all' 
-                : String(m.senderId === currentUser?.id ? m.receiverId : m.senderId);
-            if (!groups[key] || new Date(m.timestamp) > new Date(groups[key].timestamp)) {
-                groups[key] = m;
-            }
-        });
-        return groups;
-    }, [messages, currentUser]);
-
     const inboxList = useMemo(() => {
-        const list: { person: Personnel | 'all', lastMsg: ChatMessage }[] = [];
-        const processedIds = new Set<string>();
-
-        // Add announcement if it exists
-        if (recentConversations['all']) {
-            list.push({ person: 'all', lastMsg: recentConversations['all'] });
-            processedIds.add('all');
-        }
-
-        // Add other conversations
-        Object.keys(recentConversations).forEach(id => {
-            if (processedIds.has(id)) return;
-            const p = personnel.find(per => String(per.id) === id);
-            if (p) {
-                list.push({ person: p, lastMsg: recentConversations[id] });
-                processedIds.add(id);
-            }
-        });
-
-        // Add sample users for UI fullness if list is small
-        if (list.length < 4) {
-            const sampleUsers = [
-                {id: 999991, personnelName: "นายคงศักดิ์ ปัดเถ", profileImage: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=387&q=80'},
-                {id: 999992, personnelName: "นายธนิท ธนพัฒน์นิธิศกุล", profileImage: 'https://images.unsplash.com/photo-1628157588553-5eeea00af15c?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=580&q=80'},
-                {id: 999993, personnelName: "สุจิตา ภูผาทอง", profileImage: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=387&q=80'},
-            ];
-            sampleUsers.forEach((user, index) => {
-                if (list.length < 4 && !list.some(item => item.person !== 'all' && item.person.id === user.id)) {
-                    list.push({
-                        person: user as any,
-                        lastMsg: { id: 100+index, text: index % 2 === 0 ? "You: สวัสดีครับ" : "ส่งแผนการสอนยังไง?", timestamp: new Date(Date.now() - (index+1) * 3600000).toISOString() } as ChatMessage
-                    });
-                }
-            });
-        }
+        const conversations: Map<string, { person: Personnel | 'all', lastMsg: ChatMessage }> = new Map();
         
-        return list.sort((a, b) => new Date(b.lastMsg.timestamp).getTime() - new Date(a.lastMsg.timestamp).getTime());
-    }, [recentConversations, personnel]);
+        const sortedMessages = [...messages].sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+        for (const msg of sortedMessages) {
+            if (msg.isDeleted) continue;
+            let key: string;
+            let person: Personnel | 'all' | undefined;
+
+            if (msg.receiverId === 'all') {
+                key = 'all';
+                person = 'all';
+            } else {
+                const otherId = msg.senderId === currentUser?.id ? msg.receiverId : msg.senderId;
+                key = String(otherId);
+                person = personnel.find(p => p.id === otherId);
+            }
+            
+            if (person && !conversations.has(key)) {
+                conversations.set(key, { person, lastMsg: msg });
+            }
+        }
+        return Array.from(conversations.values());
+    }, [messages, currentUser, personnel]);
 
 
-// FIX: Implement the handleSend function to allow sending messages.
     const handleSend = async () => {
-        if (!input.trim() || !currentUser || !selectedContact) return;
+        if ((!input.trim() && !attachment) || !currentUser || !selectedContact) return;
 
         setIsSending(true);
         const receiverId = selectedContact === 'all' ? 'all' : selectedContact.id;
         const tempId = Date.now();
-        const newMessage: ChatMessage = {
+        
+        let messageData: Partial<ChatMessage> = {
             id: tempId,
             senderId: currentUser.id,
             senderName: `${currentUser.personnelTitle}${currentUser.personnelName}`,
             receiverId: receiverId,
             text: input,
             timestamp: new Date().toISOString(),
-            isRead: true, // It's read by the sender
+            isRead: true, // Optimistic: read by sender
         };
         
-        // Optimistic update
-        setMessages(prev => [...prev, newMessage]);
+        if (attachment) {
+            messageData.attachments = [attachment];
+            messageData.text = input || `Sent a file: ${attachment.name}`;
+        }
+        
+        setMessages(prev => [...prev, messageData as ChatMessage]);
         setInput('');
+        setAttachment(null);
 
         try {
+            const apiPayload = await prepareDataForApi(messageData);
             const response = await postToGoogleScript({
                 action: 'sendChatMessage',
-                message: newMessage
+                data: apiPayload
             });
 
             if (response.status === 'success' && response.data) {
-                // Replace temp message with server-confirmed message
                 setMessages(prev => prev.map(m => m.id === tempId ? response.data : m));
             } else {
-                throw new Error(response.message || 'Failed to send message');
+                throw new Error('Failed to send message');
             }
         } catch (e) {
             console.error('Send chat error:', e);
-            // Revert optimistic update on failure
             setMessages(prev => prev.filter(m => m.id !== tempId));
-            setInput(newMessage.text); // Put the text back
+            setInput(messageData.text || '');
+            setAttachment(messageData.attachments ? messageData.attachments[0] as File : null);
             alert('ไม่สามารถส่งข้อความได้');
         } finally {
             setIsSending(false);
+        }
+    };
+    
+    const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+        if (event.target.files && event.target.files[0]) {
+            setAttachment(event.target.files[0]);
         }
     };
 
@@ -213,7 +230,7 @@ const AIChatPopup: React.FC<ChatPopupProps> = ({ currentUser, personnel }) => {
     
     const handleClose = () => {
         setIsOpen(false);
-        setTimeout(() => { // Delay reset to allow closing animation
+        setTimeout(() => { // Delay reset for closing animation
             setView('list'); 
             setSelectedContact(null);
         }, 300);
@@ -221,16 +238,40 @@ const AIChatPopup: React.FC<ChatPopupProps> = ({ currentUser, personnel }) => {
     
     const renderChatBubble = (msg: ChatMessage) => {
         const isMe = msg.senderId === currentUser?.id;
+        const sender = isMe ? currentUser : personnel.find(p => p.id === msg.senderId);
+        const attachments = msg.attachments ? safeParseArray(msg.attachments) : [];
+        
+        const isImageAttachment = attachments.length > 0 && (String(getFirstImageSource(attachments[0])).toLowerCase().match(/\.(jpeg|jpg|gif|png|webp)$/) != null);
+        const isFileAttachment = attachments.length > 0 && !isImageAttachment;
+
         return (
             <div key={msg.id} className={`flex items-end gap-2 ${isMe ? 'justify-end' : 'justify-start'}`}>
                 {!isMe && (
                     <div className="w-8 h-8 rounded-full bg-gray-200 overflow-hidden flex-shrink-0">
-                        {/* Add profile image of sender */}
+                        {sender && getFirstImageSource(sender.profileImage) ? <img src={getFirstImageSource(sender.profileImage)!} className="w-full h-full object-cover" /> : <div className="flex items-center justify-center h-full text-xs font-bold text-gray-400">{sender?.personnelName.charAt(0)}</div>}
                     </div>
                 )}
-                <div className={`p-3 rounded-2xl max-w-[70%] ${isMe ? 'bg-blue-600 text-white rounded-br-lg' : 'bg-gray-100 text-gray-800 rounded-bl-lg'}`}>
-                    <p className="text-sm">{msg.text}</p>
-                    <p className={`text-[10px] mt-1 text-right ${isMe ? 'text-blue-200' : 'text-gray-400'}`}>{formatOnlyTime(msg.timestamp)}</p>
+                <div className={`p-1 rounded-2xl max-w-[70%] ${isMe ? 'bg-blue-600 text-white rounded-br-lg' : 'bg-gray-100 text-gray-800 rounded-bl-lg'}`}>
+                    {isImageAttachment && (
+                        <div className="p-2">
+                            <img src={getFirstImageSource(attachments[0])!} className="rounded-xl max-w-xs" alt="attachment" />
+                        </div>
+                    )}
+                    
+                    {msg.text && (
+                        isFileAttachment ? (
+                            <a href={getFirstImageSource(attachments[0])!} target="_blank" rel="noreferrer" className="flex items-start gap-2 px-3 pt-2 pb-1 text-current no-underline hover:underline">
+                                <span className="flex-shrink-0 mt-1">
+                                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clipRule="evenodd"></path></svg>
+                                </span>
+                                <p className="text-sm break-words">{msg.text}</p>
+                            </a>
+                        ) : (
+                            <p className="text-sm px-3 pt-2 pb-1">{msg.text}</p>
+                        )
+                    )}
+                    
+                    <p className={`text-[10px] mt-1 text-right px-3 pb-2 ${isMe ? 'text-blue-200' : 'text-gray-400'}`}>{formatOnlyTime(msg.timestamp)}</p>
                 </div>
             </div>
         )
@@ -244,29 +285,32 @@ const AIChatPopup: React.FC<ChatPopupProps> = ({ currentUser, personnel }) => {
                         {/* Main List View */}
                         {view === 'list' && (
                              <div className="flex flex-col h-full">
-                                <div className="p-4 pt-5 shrink-0">
+                                <div className="p-4 pt-5 shrink-0 flex justify-between items-center">
+                                    <h2 className="text-2xl font-bold text-navy">Messenger</h2>
+                                    <div>
+                                        <button onClick={() => setView('newMessage')} className="p-2 bg-blue-100 text-blue-600 rounded-full hover:bg-blue-200" title="New Message">
+                                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
+                                        </button>
+                                        <button onClick={handleClose} className="p-2 ml-2 bg-gray-100 text-gray-600 rounded-full hover:bg-gray-200" title="Close">
+                                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="p-4 pt-2 shrink-0">
+                                    <p className="text-xs font-bold text-gray-400 uppercase mb-2">Online</p>
                                     <div className="flex items-center gap-4 overflow-x-auto no-scrollbar pb-2">
-                                        {personnel.slice(0, 5).map(c => (
+                                        {personnel.filter(p => onlineStatus.get(p.id) && p.id !== currentUser?.id).slice(0, 8).map(c => (
                                             <div key={c.id} onClick={() => handleSelectChat(c)} className="flex flex-col items-center gap-1.5 cursor-pointer flex-shrink-0 w-16 group">
                                                 <div className="relative">
                                                     <div className="w-14 h-14 rounded-full bg-gray-200 overflow-hidden border-2 border-white shadow-sm transition-transform group-hover:scale-105">
                                                         {getFirstImageSource(c.profileImage) ? <img src={getFirstImageSource(c.profileImage)!} className="w-full h-full object-cover" /> : <div className="flex items-center justify-center h-full font-bold text-gray-500">{c.personnelName.charAt(0)}</div>}
                                                     </div>
-                                                    <span className={`absolute bottom-0 right-0 w-4 h-4 rounded-full border-2 border-white ${onlineStatus.get(c.id) ? 'bg-green-500' : 'bg-gray-400'}`}></span>
+                                                    <span className="absolute bottom-0 right-0 w-4 h-4 rounded-full border-2 border-white bg-green-500"></span>
                                                 </div>
                                                 <p className="text-xs text-gray-600 truncate w-full text-center font-medium">{c.personnelName.split(' ')[0]}</p>
                                             </div>
                                         ))}
                                     </div>
-                                </div>
-                                <div className="px-4 pb-2 border-b border-gray-100 shrink-0">
-                                     <button onClick={() => handleSelectChat('all')} className="w-full flex items-center gap-4 p-4 bg-blue-50 hover:bg-blue-100 rounded-2xl cursor-pointer border border-blue-100/50 text-left transition-colors">
-                                        <div className="w-12 h-12 rounded-full bg-blue-100 flex-shrink-0 flex items-center justify-center text-2xl shadow-inner">📢</div>
-                                        <div className="flex-grow">
-                                            <p className="font-bold text-base text-blue-800">ประกาศถึงทุกคน</p>
-                                            <p className="text-xs text-blue-600 font-medium">ส่งข้อความแจ้งเตือนถึงบุคลากรทั้งหมด</p>
-                                        </div>
-                                    </button>
                                 </div>
                                 
                                 <div className="flex-grow overflow-y-auto p-2" ref={scrollRef}>
@@ -302,37 +346,66 @@ const AIChatPopup: React.FC<ChatPopupProps> = ({ currentUser, personnel }) => {
                         )}
 
                         {/* Chat View */}
-                        {view === 'chat' && selectedContact && (
+                        {view === 'chat' && selectedContact && currentUser && (
                              <div className="flex flex-col h-full">
-                                <div className="p-3 border-b shrink-0 flex items-center gap-3 bg-white/80 backdrop-blur-sm">
+                                <div className="p-3 border-b shrink-0 flex items-center gap-3 bg-white/80 backdrop-blur-sm z-10">
                                     <button onClick={() => setView('list')} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full"><svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg></button>
                                     <div className="w-10 h-10 rounded-full bg-gray-200 overflow-hidden">
-                                        {/* Profile image here */}
+                                        {selectedContact !== 'all' && getFirstImageSource(selectedContact.profileImage) ? <img src={getFirstImageSource(selectedContact.profileImage)!} className="w-full h-full object-cover" /> : <div className="flex items-center justify-center h-full text-lg">{selectedContact === 'all' ? '📢' : selectedContact.personnelName.charAt(0)}</div>}
                                     </div>
                                     <div>
                                         <p className="font-bold text-base text-gray-900">{selectedContact === 'all' ? 'ประกาศถึงทุกคน' : selectedContact.personnelName}</p>
-                                        <p className="text-xs text-gray-500">Online</p>
+                                        <p className="text-xs text-gray-500">{selectedContact !== 'all' && onlineStatus.get(selectedContact.id) ? 'Online' : 'Offline'}</p>
                                     </div>
                                 </div>
-                                <div className="flex-grow p-4 space-y-4 overflow-y-auto" ref={scrollRef}>
+                                <div className="flex-grow p-4 space-y-4 overflow-y-auto bg-gray-50" ref={scrollRef}>
                                     {activeMessages.map(renderChatBubble)}
                                 </div>
-                                <div className="p-4 border-t shrink-0 bg-white">
+                                <div className="p-2 border-t shrink-0 bg-white">
+                                    {attachment && (
+                                        <div className="p-2 flex justify-between items-center bg-gray-100 rounded-lg mb-2">
+                                            {attachmentPreview ? <img src={attachmentPreview} className="w-16 h-16 rounded object-cover" /> : <div className="text-xs p-2 bg-gray-200 rounded">{attachment.name}</div>}
+                                            <button onClick={() => setAttachment(null)} className="p-2 text-red-500">&times;</button>
+                                        </div>
+                                    )}
                                     <div className="flex items-center gap-2">
-                                        <input 
-                                            type="text" 
-                                            value={input}
-                                            onChange={e => setInput(e.target.value)}
-                                            onKeyPress={e => e.key === 'Enter' && handleSend()}
-                                            placeholder="Type a message..." 
-                                            className="flex-grow bg-gray-100 border-none rounded-full px-5 py-3 outline-none focus:ring-2 focus:ring-primary-blue"
-                                        />
+                                        <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" />
+                                        <input type="file" ref={cameraInputRef} accept="image/*" capture="environment" onChange={handleFileSelect} className="hidden" />
+                                        <button onClick={() => cameraInputRef.current?.click()} className="p-3 text-gray-500 hover:bg-gray-100 rounded-full"><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg></button>
+                                        <button onClick={() => fileInputRef.current?.click()} className="p-3 text-gray-500 hover:bg-gray-100 rounded-full"><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg></button>
+                                        <input type="text" value={input} onChange={e => setInput(e.target.value)} onKeyPress={e => e.key === 'Enter' && handleSend()} placeholder="Type a message..." className="flex-grow bg-gray-100 border-none rounded-full px-5 py-3 outline-none focus:ring-2 focus:ring-primary-blue" />
                                         <button onClick={handleSend} disabled={isSending} className="p-3 bg-primary-blue text-white rounded-full disabled:opacity-50 transition-transform active:scale-90">
                                             <svg className="w-5 h-5 transform rotate-45" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
                                         </button>
                                     </div>
                                 </div>
                              </div>
+                        )}
+
+                         {/* New Message View */}
+                        {view === 'newMessage' && (
+                            <div className="flex flex-col h-full">
+                                <div className="p-3 border-b shrink-0 flex items-center gap-3">
+                                    <button onClick={() => setView('list')} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full"><svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg></button>
+                                    <h3 className="text-lg font-bold text-navy">New Message</h3>
+                                </div>
+                                <div className="p-4 shrink-0">
+                                    <input type="text" placeholder="ค้นหาบุคลากร..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full bg-gray-100 border-none rounded-full px-5 py-3" />
+                                </div>
+                                <div className="flex-grow overflow-y-auto p-2">
+                                    {allContacts.filter(c => c.personnelName.toLowerCase().includes(searchTerm.toLowerCase())).map(contact => (
+                                        <div key={contact.id} onClick={() => handleSelectChat(contact)} className="flex items-center gap-4 p-3 hover:bg-gray-50 rounded-lg cursor-pointer">
+                                            <div className="w-12 h-12 rounded-full bg-gray-200 overflow-hidden">
+                                                {getFirstImageSource(contact.profileImage) && <img src={getFirstImageSource(contact.profileImage)!} className="w-full h-full object-cover" />}
+                                            </div>
+                                            <div>
+                                                <p className="font-bold text-base text-gray-900">{contact.personnelName}</p>
+                                                <p className="text-xs text-gray-500">{contact.position}</p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
                         )}
                     </div>
                 )}
@@ -353,6 +426,13 @@ const AIChatPopup: React.FC<ChatPopupProps> = ({ currentUser, personnel }) => {
                         </span>
                     )}
                 </button>
+            </div>
+            
+            <div className={`fixed bottom-24 right-6 z-[1090] transition-all duration-300 ${isOpen ? 'opacity-0 -translate-y-4 pointer-events-none' : 'opacity-100'}`}>
+                <div className="bg-white/80 backdrop-blur-md p-2 pl-4 rounded-full shadow-lg text-sm font-bold text-gray-700 flex items-center gap-2">
+                    <span>Chat with us!</span>
+                    <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                </div>
             </div>
         </>
     );

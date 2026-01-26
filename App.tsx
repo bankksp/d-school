@@ -506,6 +506,22 @@ const App: React.FC = () => {
             alert('ลบเรียบร้อย'); 
         } catch(e) { alert('Error deleting'); }
     };
+    
+    const checkIdCardExists = async (idCard: string): Promise<boolean> => {
+        const cleanIdCard = (idCard || '').replace(/[^0-9]/g, '');
+        if (!cleanIdCard || cleanIdCard.length !== 13) return false;
+        try {
+            const response = await postToGoogleScript({
+                action: 'checkIdCardExists',
+                idCard: cleanIdCard
+            });
+            return response.data.exists;
+        } catch (error) {
+            console.error("Error checking ID card:", error);
+            alert('ไม่สามารถตรวจสอบเลขบัตรประชาชนได้ กรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ต');
+            return true; // Fallback to true to prevent submission on error
+        }
+    };
 
     const renderPage = () => {
         if (isLoading && !hasInitialData) {
@@ -570,7 +586,7 @@ const App: React.FC = () => {
                 return <AdminDashboard settings={settings} onSave={handleSaveAdminSettings} onExit={() => navigateTo('stats')} isSaving={isSaving} />
             case 'profile':
                 return currentUser ? (
-                    <ProfilePage user={currentUser} onSave={(p) => handleGenericSave('updatePersonnel', p, setPersonnel)} isSaving={isSaving} />
+                    <ProfilePage user={currentUser} onSave={(p) => handleGenericSave('updatePersonnel', p, setPersonnel)} isSaving={isSaving} settings={settings} />
                 ) : null;
             case 'academic_plans':
                 return currentUser ? (
@@ -706,6 +722,7 @@ const App: React.FC = () => {
                 onLoginSuccess={handleLoginSuccess}
                 schoolName={settings.schoolName}
                 schoolLogo={settings.schoolLogo}
+                checkIdCardExists={checkIdCardExists}
             />
         );
     }
@@ -748,11 +765,7 @@ const App: React.FC = () => {
                 </main>
                 <AIChatPopup 
                     currentUser={currentUser}
-                    students={students} 
                     personnel={personnel} 
-                    reports={reports} 
-                    settings={settings} 
-                    studentAttendance={studentAttendance} 
                 />
             </div>
             {showSyncToast && (
@@ -762,13 +775,20 @@ const App: React.FC = () => {
                 </div>
             )}
             <LoginModal isOpen={isLoginModalOpen} onClose={() => setIsLoginModalOpen(false)} onLogin={handleSessionLogin} personnelList={personnel} onRegisterClick={() => { setIsLoginModalOpen(false); setIsRegisterModalOpen(true); }} />
-            <RegisterModal isOpen={isRegisterModalOpen} onClose={() => setIsRegisterModalOpen(false)} onRegister={async (p) => { 
-                const success = await handleGenericSave('addPersonnel', p, setPersonnel); 
-                if (success) { 
-                    setIsRegisterModalOpen(false); 
-                    alert('ลงทะเบียนสำเร็จ! กรุณารอผู้ดูแลระบบอนุมัติ'); 
-                } 
-            }} positions={settings.positions} isSaving={isSaving} />
+            <RegisterModal 
+                isOpen={isRegisterModalOpen} 
+                onClose={() => setIsRegisterModalOpen(false)} 
+                onRegister={async (p) => { 
+                    const success = await handleGenericSave('addPersonnel', p, setPersonnel); 
+                    if (success) { 
+                        setIsRegisterModalOpen(false); 
+                        alert('ลงทะเบียนสำเร็จ! กรุณารอผู้ดูแลระบบอนุมัติ'); 
+                    } 
+                }} 
+                positions={settings.positions} 
+                isSaving={isSaving}
+                checkIdCardExists={checkIdCardExists}
+            />
             {isReportModalOpen && (
                 <ReportModal onClose={handleCloseReportModal} onSave={handleSaveReport} reportToEdit={editingReport} academicYears={settings.academicYears} dormitories={settings.dormitories} positions={settings.positions} isSaving={isSaving} personnel={personnel} currentUser={currentUser} students={students} />
             )}
@@ -791,7 +811,16 @@ const App: React.FC = () => {
             {viewingStudent && <ViewStudentModal student={viewingStudent} onClose={() => setViewingStudent(null)} personnel={personnel} schoolName={settings.schoolName} schoolLogo={settings.schoolLogo} currentUser={currentUser} />}
             {isPersonnelModalOpen && (
                 <PersonnelModal onClose={() => setIsPersonnelModalOpen(false)} onSave={async (p) => { 
-                    const success = await handleGenericSave(editingPersonnel ? 'updatePersonnel' : 'addPersonnel', p, setPersonnel); 
+                    const isEditing = !!editingPersonnel;
+                    if (!isEditing) { // This is an 'add' operation
+                        const cleanIdCard = (p.idCard || '').replace(/[^0-9]/g, '');
+                        const exists = await checkIdCardExists(cleanIdCard);
+                        if (cleanIdCard && exists) {
+                            alert('เลขบัตรประชาชนนี้มีอยู่ในระบบแล้ว');
+                            return; // Stop the process
+                        }
+                    }
+                    const success = await handleGenericSave(isEditing ? 'updatePersonnel' : 'addPersonnel', p, setPersonnel); 
                     if (success) setIsPersonnelModalOpen(false); 
                 }} personnelToEdit={editingPersonnel} positions={settings.positions} students={students} isSaving={isSaving} currentUserRole={currentUser?.role} currentUser={currentUser} settings={settings} />
             )}

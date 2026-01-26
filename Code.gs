@@ -107,6 +107,14 @@ function doPost(e) {
       case 'checkVersion':
         return responseJSON({ status: 'success', version: SCRIPT_VERSION });
 
+      case 'checkIdCardExists': {
+        const personnelSheet = getSheet(SHEET_NAMES.PERSONNEL);
+        const personnel = readSheet(personnelSheet);
+        const cleanIdCard = String(request.idCard || '').replace(/[^0-9]/g, '');
+        const exists = personnel.some(p => String(p.idCard || '').replace(/[^0-9]/g, '') === cleanIdCard);
+        return responseJSON({ status: 'success', data: { exists: exists } });
+      }
+
       case 'login':
         const personnel = readSheet(getSheet(SHEET_NAMES.PERSONNEL));
         const identifier = String(request.identifier || "").toLowerCase().trim();
