@@ -22,7 +22,10 @@ const PerformanceReportModal: React.FC<PerformanceReportModalProps> = ({
     
     useEffect(() => {
         if (reportToEdit) {
-            setFormData(reportToEdit);
+            setFormData({
+                ...reportToEdit,
+                file: safeParseArray(reportToEdit.file),
+            });
         } else {
             const title = currentUser.personnelTitle === 'อื่นๆ' ? currentUser.personnelTitleOther : currentUser.personnelTitle;
             setFormData({
@@ -33,7 +36,8 @@ const PerformanceReportModal: React.FC<PerformanceReportModalProps> = ({
                 position: currentUser.position,
                 academicStanding: currentUser.academicStanding || '',
                 major: currentUser.educationBackgrounds?.[0]?.major || '',
-                file: [],
+                file: mode === 'salary_promotion' ? [] : undefined,
+                agreementTopic: mode === 'pa' ? '' : undefined,
                 status: 'pending',
                 submissionDate: getCurrentThaiDate(),
                 reportType: mode,
@@ -42,8 +46,9 @@ const PerformanceReportModal: React.FC<PerformanceReportModalProps> = ({
     }, [reportToEdit, currentUser, academicYears, mode]);
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files[0]) {
-            setFormData(prev => ({ ...prev, file: [e.target.files![0]] }));
+        const { name, files } = e.target;
+        if (files && files[0]) {
+            setFormData(prev => ({ ...prev, [name]: [files[0]] }));
         }
     };
 
@@ -101,11 +106,27 @@ const PerformanceReportModal: React.FC<PerformanceReportModalProps> = ({
                         <label className="block text-sm font-medium text-gray-700 mb-1">วิชาเอก</label>
                         <input type="text" value={formData.major || ''} onChange={e => setFormData({...formData, major: e.target.value})} className="w-full border border-gray-300 rounded-lg px-3 py-2" />
                     </div>
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">ไฟล์รายงาน (PDF, Word)</label>
-                        <input type="file" onChange={handleFileChange} className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-primary-blue hover:file:bg-blue-100" />
-                         {safeParseArray(formData.file).length > 0 && <p className="mt-2 text-xs text-green-600 font-bold">✓ เลือกไฟล์เรียบร้อย: { (formData.file![0] as File).name || 'ไฟล์เดิม'}</p>}
-                    </div>
+
+                    {mode === 'pa' ? (
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">เรื่องข้อตกลงในการพัฒนางาน (PA)</label>
+                            <input
+                                type="text"
+                                name="agreementTopic"
+                                value={formData.agreementTopic || ''}
+                                onChange={e => setFormData(prev => ({ ...prev, agreementTopic: e.target.value }))}
+                                className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                                placeholder="พิมพ์ชื่อเรื่องข้อตกลง..."
+                                required
+                            />
+                        </div>
+                    ) : (
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">ไฟล์รายงานผลการปฏิบัติงาน (PDF, Word)</label>
+                            <input type="file" name="file" onChange={handleFileChange} className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-primary-blue hover:file:bg-blue-100" />
+                            {safeParseArray(formData.file).length > 0 && <p className="mt-2 text-xs text-green-600 font-bold">✓ เลือกไฟล์เรียบร้อย: { (formData.file![0] as File).name || 'ไฟล์เดิม'}</p>}
+                        </div>
+                    )}
                 </form>
                 <div className="p-4 border-t flex justify-end gap-3 bg-gray-50 rounded-b-2xl">
                     <button type="button" onClick={onClose} className="px-4 py-2 bg-gray-200 rounded-lg font-bold hover:bg-gray-300 text-gray-700">ยกเลิก</button>
@@ -271,16 +292,32 @@ const PersonnelReportPage: React.FC<PersonnelReportPageProps> = ({
             alert('ไม่มีข้อมูลให้ส่งออก');
             return;
         }
-        const headers = ['ลำดับ', 'ชื่อ-สกุล', 'ตำแหน่ง', 'วิทยฐานะ', 'วิชาเอก', 'ปีการศึกษา', 'รอบ'];
-        const rows = filteredReports.map((r, index) => [
-            index + 1,
-            r.name,
-            r.position,
-            r.academicStanding || '-',
-            r.major || '-',
-            r.academicYear,
-            r.round
-        ]);
+        const headers = mode === 'pa'
+            ? ['ลำดับ', 'ชื่อ-สกุล', 'ตำแหน่ง', 'วิทยฐานะ', 'วิชาเอก', 'ปีการศึกษา', 'รอบ', 'เรื่องข้อตกลง (PA)']
+            : ['ลำดับ', 'ชื่อ-สกุล', 'ตำแหน่ง', 'วิทยฐานะ', 'วิชาเอก', 'ปีการศึกษา', 'รอบ', 'ไฟล์รายงานผลการปฏิบัติงาน'];
+        
+        const rows = filteredReports.map((r, index) => {
+            const baseRow = [
+                index + 1,
+                r.name,
+                r.position,
+                r.academicStanding || '-',
+                r.major || '-',
+                r.academicYear,
+                r.round,
+            ];
+            if (mode === 'pa') {
+                return [
+                    ...baseRow,
+                    r.agreementTopic || '-'
+                ];
+            } else {
+                return [
+                    ...baseRow,
+                    getDriveViewUrl(safeParseArray(r.file)[0])
+                ];
+            }
+        });
 
         let csvContent = "data:text/csv;charset=utf-8,\uFEFF";
         csvContent += headers.map(h => `"${h}"`).join(",") + "\r\n";
@@ -319,9 +356,9 @@ const PersonnelReportPage: React.FC<PersonnelReportPageProps> = ({
                 <div className="space-y-6 animate-fade-in">
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                         <StatsCard title="รายงานทั้งหมด" value={stats.total.toString()} icon={<svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>} color="bg-blue-500" />
-                        <StatsCard title="รอตรวจสอบ" value={stats.pending.toString()} icon={<svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>} color="bg-yellow-500" />
-                        <StatsCard title="ผ่านการประเมิน" value={stats.approved.toString()} icon={<svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>} color="bg-green-500" />
-                        <StatsCard title="ต้องแก้ไข/ไม่ผ่าน" value={stats.needs_edit.toString()} icon={<svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>} color="bg-red-500" />
+                        <StatsCard title="รอตรวจสอบ" value={stats.pending.toString()} icon={<svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>} color="bg-yellow-500" />
+                        <StatsCard title="ผ่านการประเมิน" value={stats.approved.toString()} icon={<svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>} color="bg-green-500" />
+                        <StatsCard title="ต้องแก้ไข/ไม่ผ่าน" value={stats.needs_edit.toString()} icon={<svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>} color="bg-red-500" />
                     </div>
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                         <div className="bg-white p-6 rounded-2xl shadow-lg border border-gray-100 h-96">
@@ -390,27 +427,68 @@ const PersonnelReportPage: React.FC<PersonnelReportPageProps> = ({
                     </div>
                     <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-100">
                         {selectedIds.size > 0 && isAdminOrPro && <div className="mb-4 flex justify-end"><button onClick={handleDelete} className="bg-red-500 text-white px-3 py-1 rounded text-sm font-bold">ลบ {selectedIds.size} รายการ</button></div>}
-                        <div className="overflow-x-auto rounded-lg border"><table className="w-full text-sm"><thead className="bg-gray-50 text-gray-600"><tr><th className="p-3 w-8"><input type="checkbox" className="rounded" onChange={(e) => setSelectedIds(e.target.checked ? new Set(filteredReports.map(r=>r.id)) : new Set())}/></th><th className="p-3">ปี/รอบ</th><th className="p-3">วันที่ส่ง</th><th className="p-3">ชื่อ-สกุล</th><th className="p-3">ตำแหน่ง/วิทยฐานะ</th><th className="p-3">ไฟล์</th><th className="p-3 text-center">สถานะ</th><th className="p-3 text-center">จัดการ</th></tr></thead><tbody className="divide-y">{filteredReports.map(r => (<tr key={r.id} className="hover:bg-gray-50"><td className="p-3"><input type="checkbox" className="rounded" checked={selectedIds.has(r.id)} onChange={() => {const next = new Set(selectedIds); if (next.has(r.id)) next.delete(r.id); else next.add(r.id); setSelectedIds(next);}} /></td><td className="p-3 whitespace-nowrap"><div>{r.academicYear}</div><div className="text-xs text-gray-500">รอบที่ {r.round}</div></td><td className="p-3 whitespace-nowrap">{formatThaiDate(r.submissionDate)}</td><td className="p-3 font-medium text-navy whitespace-nowrap">{r.name}</td><td className="p-3"><div className="whitespace-nowrap">{r.position}</div><div className="text-xs text-blue-600 whitespace-nowrap">{r.academicStanding || '-'}</div></td><td className="p-3"><a href={getDriveViewUrl(safeParseArray(r.file)[0])} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">ดูไฟล์</a></td>
-                        <td className="p-3 text-center">
-                            {isAdminOrPro ? (
-                                <select 
-                                    value={r.status} 
-                                    onChange={(e) => handleStatusUpdate(r.id, e.target.value as PerformanceReport['status'])}
-                                    onClick={(e) => e.stopPropagation()}
-                                    className={`text-xs font-bold border-2 rounded-full px-2 py-1 outline-none appearance-none focus:ring-2 focus:ring-offset-1
-                                        ${r.status === 'approved' ? 'bg-green-100 text-green-700 border-green-200 focus:ring-green-400' :
-                                          r.status === 'needs_edit' ? 'bg-red-100 text-red-700 border-red-200 focus:ring-red-400' :
-                                          'bg-yellow-100 text-yellow-700 border-yellow-200 focus:ring-yellow-400'}`}
-                                >
-                                    <option value="pending">รอตรวจ</option>
-                                    <option value="approved">ผ่าน</option>
-                                    <option value="needs_edit">ไม่ผ่าน</option>
-                                </select>
-                            ) : (
-                                getStatusBadge(r.status)
-                            )}
-                        </td>
-                        <td className="p-3 text-center"><button onClick={() => handleOpenModal(r)} className="text-blue-600 hover:underline text-xs font-bold">ดู/แก้ไข</button></td></tr>))}</tbody></table></div>
+                        <div className="overflow-x-auto rounded-lg border">
+                            <table className="w-full text-sm">
+                                <thead className="bg-gray-50 text-gray-600">
+                                    <tr>
+                                        <th className="p-3 w-8"><input type="checkbox" className="rounded" onChange={(e) => setSelectedIds(e.target.checked ? new Set(filteredReports.map(r=>r.id)) : new Set())}/></th>
+                                        <th className="p-3">ปี/รอบ</th>
+                                        <th className="p-3">วันที่ส่ง</th>
+                                        <th className="p-3">ชื่อ-สกุล</th>
+                                        <th className="p-3">ตำแหน่ง/วิทยฐานะ</th>
+                                        {mode === 'pa' ? (
+                                            <th className="p-3">เรื่องข้อตกลง (PA)</th>
+                                        ) : (
+                                            <th className="p-3">ไฟล์รายงาน</th>
+                                        )}
+                                        <th className="p-3 text-center">สถานะ</th>
+                                        <th className="p-3 text-center">จัดการ</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y">
+                                    {filteredReports.map(r => (
+                                        <tr key={r.id} className="hover:bg-gray-50">
+                                            <td className="p-3"><input type="checkbox" className="rounded" checked={selectedIds.has(r.id)} onChange={() => {const next = new Set(selectedIds); if (next.has(r.id)) next.delete(r.id); else next.add(r.id); setSelectedIds(next);}} /></td>
+                                            <td className="p-3 whitespace-nowrap"><div>{r.academicYear}</div><div className="text-xs text-gray-500">รอบที่ {r.round}</div></td>
+                                            <td className="p-3 whitespace-nowrap">{formatThaiDate(r.submissionDate)}</td>
+                                            <td className="p-3 font-medium text-navy whitespace-nowrap">{r.name}</td>
+                                            <td className="p-3"><div className="whitespace-nowrap">{r.position}</div><div className="text-xs text-blue-600 whitespace-nowrap">{r.academicStanding || '-'}</div></td>
+                                            
+                                            {mode === 'pa' ? (
+                                                <td className="p-3 whitespace-normal break-words max-w-xs">{r.agreementTopic || '-'}</td>
+                                            ) : (
+                                                <td className="p-3">
+                                                    {safeParseArray(r.file).length > 0 ? (
+                                                        <a href={getDriveViewUrl(safeParseArray(r.file)[0])} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">ดูไฟล์รายงาน</a>
+                                                    ) : '-'}
+                                                </td>
+                                            )}
+
+                                            <td className="p-3 text-center">
+                                                {isAdminOrPro ? (
+                                                    <select 
+                                                        value={r.status} 
+                                                        onChange={(e) => handleStatusUpdate(r.id, e.target.value as PerformanceReport['status'])}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        className={`text-xs font-bold border-2 rounded-full px-2 py-1 outline-none appearance-none focus:ring-2 focus:ring-offset-1
+                                                            ${r.status === 'approved' ? 'bg-green-100 text-green-700 border-green-200 focus:ring-green-400' :
+                                                            r.status === 'needs_edit' ? 'bg-red-100 text-red-700 border-red-200 focus:ring-red-400' :
+                                                            'bg-yellow-100 text-yellow-700 border-yellow-200 focus:ring-yellow-400'}`}
+                                                    >
+                                                        <option value="pending">รอตรวจ</option>
+                                                        <option value="approved">ผ่าน</option>
+                                                        <option value="needs_edit">ไม่ผ่าน</option>
+                                                    </select>
+                                                ) : (
+                                                    getStatusBadge(r.status)
+                                                )}
+                                            </td>
+                                            <td className="p-3 text-center"><button onClick={() => handleOpenModal(r)} className="text-blue-600 hover:underline text-xs font-bold">ดู/แก้ไข</button></td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             )}

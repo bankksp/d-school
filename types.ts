@@ -551,6 +551,7 @@ export interface PerformanceReport {
   academicYear: string;
   round: string; 
   file?: (File | string)[];
+  agreementTopic?: string;
   score?: number;
   status: 'pending' | 'approved' | 'needs_edit';
   submissionDate: string;
