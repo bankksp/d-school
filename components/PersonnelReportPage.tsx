@@ -36,8 +36,8 @@ const PerformanceReportModal: React.FC<PerformanceReportModalProps> = ({
                 position: currentUser.position,
                 academicStanding: currentUser.academicStanding || '',
                 major: currentUser.educationBackgrounds?.[0]?.major || '',
-                file: mode === 'salary_promotion' ? [] : undefined,
-                agreementTopic: mode === 'pa' ? '' : undefined,
+                file: [], // Always initialize file array
+                agreementTopic: mode === 'pa' ? '' : undefined, // Only for PA
                 status: 'pending',
                 submissionDate: getCurrentThaiDate(),
                 reportType: mode,
@@ -108,18 +108,25 @@ const PerformanceReportModal: React.FC<PerformanceReportModalProps> = ({
                     </div>
 
                     {mode === 'pa' ? (
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">เรื่องข้อตกลงในการพัฒนางาน (PA)</label>
-                            <input
-                                type="text"
-                                name="agreementTopic"
-                                value={formData.agreementTopic || ''}
-                                onChange={e => setFormData(prev => ({ ...prev, agreementTopic: e.target.value }))}
-                                className="w-full border border-gray-300 rounded-lg px-3 py-2"
-                                placeholder="พิมพ์ชื่อเรื่องข้อตกลง..."
-                                required
-                            />
-                        </div>
+                        <>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">ไฟล์เล่มรายงานการปฏิบัติงาน (PA)</label>
+                                <input type="file" name="file" onChange={handleFileChange} className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-primary-blue hover:file:bg-blue-100" />
+                                {safeParseArray(formData.file).length > 0 && <p className="mt-2 text-xs text-green-600 font-bold">✓ เลือกไฟล์เรียบร้อย: { (formData.file![0] as File).name || 'ไฟล์เดิม'}</p>}
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">เรื่องข้อตกลงในการพัฒนางาน (PA)</label>
+                                <input
+                                    type="text"
+                                    name="agreementTopic"
+                                    value={formData.agreementTopic || ''}
+                                    onChange={e => setFormData(prev => ({ ...prev, agreementTopic: e.target.value }))}
+                                    className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                                    placeholder="พิมพ์ชื่อเรื่องข้อตกลง..."
+                                    required
+                                />
+                            </div>
+                        </>
                     ) : (
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">ไฟล์รายงานผลการปฏิบัติงาน (PDF, Word)</label>
@@ -293,7 +300,7 @@ const PersonnelReportPage: React.FC<PersonnelReportPageProps> = ({
             return;
         }
         const headers = mode === 'pa'
-            ? ['ลำดับ', 'ชื่อ-สกุล', 'ตำแหน่ง', 'วิทยฐานะ', 'วิชาเอก', 'ปีการศึกษา', 'รอบ', 'เรื่องข้อตกลง (PA)']
+            ? ['ลำดับ', 'ชื่อ-สกุล', 'ตำแหน่ง', 'วิทยฐานะ', 'วิชาเอก', 'ปีการศึกษา', 'รอบ', 'ไฟล์เล่ม PA', 'เรื่องข้อตกลง']
             : ['ลำดับ', 'ชื่อ-สกุล', 'ตำแหน่ง', 'วิทยฐานะ', 'วิชาเอก', 'ปีการศึกษา', 'รอบ', 'ไฟล์รายงานผลการปฏิบัติงาน'];
         
         const rows = filteredReports.map((r, index) => {
@@ -309,6 +316,7 @@ const PersonnelReportPage: React.FC<PersonnelReportPageProps> = ({
             if (mode === 'pa') {
                 return [
                     ...baseRow,
+                    getDriveViewUrl(safeParseArray(r.file)[0]),
                     r.agreementTopic || '-'
                 ];
             } else {
@@ -437,7 +445,10 @@ const PersonnelReportPage: React.FC<PersonnelReportPageProps> = ({
                                         <th className="p-3">ชื่อ-สกุล</th>
                                         <th className="p-3">ตำแหน่ง/วิทยฐานะ</th>
                                         {mode === 'pa' ? (
-                                            <th className="p-3">เรื่องข้อตกลง (PA)</th>
+                                            <>
+                                                <th className="p-3">ไฟล์เล่ม PA</th>
+                                                <th className="p-3">เรื่องข้อตกลง</th>
+                                            </>
                                         ) : (
                                             <th className="p-3">ไฟล์รายงาน</th>
                                         )}
@@ -455,7 +466,14 @@ const PersonnelReportPage: React.FC<PersonnelReportPageProps> = ({
                                             <td className="p-3"><div className="whitespace-nowrap">{r.position}</div><div className="text-xs text-blue-600 whitespace-nowrap">{r.academicStanding || '-'}</div></td>
                                             
                                             {mode === 'pa' ? (
-                                                <td className="p-3 whitespace-normal break-words max-w-xs">{r.agreementTopic || '-'}</td>
+                                                <>
+                                                    <td className="p-3">
+                                                        {safeParseArray(r.file).length > 0 ? (
+                                                            <a href={getDriveViewUrl(safeParseArray(r.file)[0])} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">ดูไฟล์</a>
+                                                        ) : '-'}
+                                                    </td>
+                                                    <td className="p-3 whitespace-normal break-words max-w-xs">{r.agreementTopic || '-'}</td>
+                                                </>
                                             ) : (
                                                 <td className="p-3">
                                                     {safeParseArray(r.file).length > 0 ? (
