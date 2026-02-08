@@ -1,8 +1,9 @@
+
 /**
  * D-school Management System - Backend Script
- * Version: 2.3 (On-Demand Fetching)
+ * Version: 2.5.0 (Enhanced Notification & Prompt Design)
  */
-const SCRIPT_VERSION = "2.3.0";
+const SCRIPT_VERSION = "2.5.0";
 
 const FOLDER_NAME = "D-school_Uploads"; 
 const SCHOOL_NAME = "โรงเรียนกาฬสินธุ์ปัญญานุกูล";
@@ -95,7 +96,8 @@ function updateRecordFields(sheet, id, fieldsToUpdate) {
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(30000)) return responseJSON({ status: 'error', message: 'Server busy, please try again.' });
+  // Reduce lock wait time to prevent timeout on client
+  if (!lock.tryLock(10000)) return responseJSON({ status: 'error', message: 'Server busy, please try again.' });
 
   try {
     const request = JSON.parse(e.postData.contents);
@@ -214,26 +216,7 @@ function doPost(e) {
         if (!url || !url.startsWith('http')) {
            return responseJSON({ status: 'error', message: 'URL ไม่ถูกต้อง' });
         }
-        const testMsg = `⚡ *D-school Connection Test*\nสถานะ: เชื่อมต่อสำเร็จ\nระบบ: ${label}\nทดสอบโดย: แอดมิน\nเวลา: ${new Date().toLocaleString('th-TH')}`;
-        try {
-          const response = UrlFetchApp.fetch(url, {
-            method: 'post',
-            contentType: 'application/json',
-            payload: JSON.stringify({ text: testMsg }),
-            muteHttpExceptions: true
-          });
-          const responseCode = response.getResponseCode();
-          if (responseCode >= 200 && responseCode < 300) {
-            return responseJSON({ status: 'success', message: 'ส่งข้อความสำเร็จ (Status: ' + responseCode + ')' });
-          } else {
-            return responseJSON({ 
-              status: 'error', 
-              message: 'Google Chat ปฏิเสธการเชื่อมต่อ (HTTP ' + responseCode + '): ' + response.getContentText() 
-            });
-          }
-        } catch (e) {
-          return responseJSON({ status: 'error', message: 'เกิดข้อผิดพลาดในการส่ง: ' + e.toString() });
-        }
+        return sendToGoogleChat(url, `⚡ *D-school Connection Test*\n✅ สถานะ: เชื่อมต่อสำเร็จ\n🤖 ระบบ: ${label}\n👤 ทดสอบโดย: ผู้ดูแลระบบ\n🕒 เวลา: ${new Date().toLocaleString('th-TH')}`);
       
       case 'updateAcademicPlanStatus': {
         const planSheet = getSheet(SHEET_NAMES.ACADEMIC_PLANS);
@@ -263,110 +246,202 @@ function doPost(e) {
   }
 }
 
-function isAdmin(userId) {
-  const personnel = readSheet(getSheet(SHEET_NAMES.PERSONNEL));
-  const user = personnel.find(p => p.id == userId);
-  return user && (user.role === 'admin' || user.role === 'pro');
+function sendToGoogleChat(webhookUrl, messageText) {
+  try {
+    if (!webhookUrl || !webhookUrl.startsWith('http')) {
+      Logger.log("Invalid Webhook URL: " + webhookUrl);
+      return responseJSON({ status: 'error', message: 'Invalid Webhook URL' });
+    }
+
+    const payload = { text: messageText };
+    const options = {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    };
+    const response = UrlFetchApp.fetch(webhookUrl, options);
+    const code = response.getResponseCode();
+    if (code >= 200 && code < 300) {
+      return responseJSON({ status: 'success', message: 'Sent' });
+    } else {
+      Logger.log("Chat API Error: " + response.getContentText());
+      return responseJSON({ status: 'error', message: `Chat Error ${code}: ${response.getContentText()}` });
+    }
+  } catch (e) {
+    Logger.log("Send Exception: " + e.toString());
+    return responseJSON({ status: 'error', message: e.toString() });
+  }
 }
 
 function triggerNotification(action, data, settings) {
-  const exemptActions = ['addPersonnel', 'updatePersonnel', 'addStudent', 'updateStudent'];
+  // Actions that do NOT trigger notifications
+  const exemptActions = ['addPersonnel', 'updatePersonnel', 'addStudent', 'updateStudent', 'deleteStudentAttendance', 'deletePersonnelAttendance', 'updateSettings'];
   if (exemptActions.includes(action)) return;
 
-  let webhookUrl = '';
-  let msg = '';
   const first = Array.isArray(data) ? data[0] : data;
   if (!first) return;
 
-  // เลือก Webhook ตาม Action
-  if (action === 'saveStudentAttendance' || action === 'savePersonnelAttendance') {
-    webhookUrl = settings.webhookAttendance;
-    const isStudent = action === 'saveStudentAttendance';
-    const periodLabels = { 'morning_act': 'กิจกรรมเช้า', 'p1': 'ชั่วโมงที่ 1', 'lunch_act': 'กิจกรรมเที่ยง', 'evening_act': 'กิจกรรมเย็น' };
-    const stats = { present: 0, absent: 0, sick: 0, leave: 0, activity: 0, home: 0 };
-    const records = Array.isArray(data) ? data : [data];
-    records.forEach(r => { if (stats[r.status] !== undefined) stats[r.status]++; });
+  let webhookUrl = '';
+  let msg = '';
 
-    msg = `📢 *รายงานการเช็คชื่อ${isStudent ? 'นักเรียน' : 'บุคลากร'}*\n` +
-          `📅 วันที่: ${first.date} | ช่วงเวลา: ${periodLabels[first.period] || first.period}\n` +
-          `--------------------------------\n` +
-          `✅ มา/ปฏิบัติหน้าที่: ${stats.present + stats.activity} คน\n` +
-          `❌ ขาด: ${stats.absent} คน | 🤒 ป่วย: ${stats.sick} คน\n` +
-          `📝 ลา: ${stats.leave} คน | 🏠 อยู่บ้าน: ${stats.home} คน\n` +
-          `--------------------------------\n` +
-          `บันทึกโดยระบบ D-school Smart Management`;
-  }
-  else if (action === 'addReport' || action === 'updateReport') {
-    webhookUrl = settings.webhookDormitory;
-    let sickList = "-";
-    let homeList = "-";
-    if (first.studentDetails) {
-      try {
-        const details = typeof first.studentDetails === 'string' ? JSON.parse(first.studentDetails) : first.studentDetails;
-        if (Array.isArray(details)) {
-           const sicks = details.filter(s => s.status === 'sick').map(s => s.name);
-           if (sicks.length > 0) sickList = sicks.join(', ');
-           const homes = details.filter(s => s.status === 'home').map(s => s.name);
-           if (homes.length > 0) homeList = homes.join(', ');
+  try {
+    switch (action) {
+      case 'saveStudentAttendance':
+      case 'savePersonnelAttendance':
+        webhookUrl = settings.webhookAttendance;
+        const isStudent = action === 'saveStudentAttendance';
+        const periodMap = { 'morning_act': 'กิจกรรมหน้าเสาธง', 'p1': 'คาบที่ 1', 'lunch_act': 'กิจกรรมกลางวัน', 'evening_act': 'กิจกรรมเย็น' };
+        
+        const stats = { present: 0, absent: 0, sick: 0, leave: 0, home: 0 };
+        const records = Array.isArray(data) ? data : [data];
+        records.forEach(r => { if (stats[r.status] !== undefined) stats[r.status]++; });
+        const totalCheck = records.length;
+        const presentTotal = (stats.present || 0);
+
+        msg = `📊 *รายงานการเช็คชื่อ${isStudent ? 'นักเรียน' : 'บุคลากร'}*\n` +
+              `📅 วันที่: ${first.date} | ช่วง: ${periodMap[first.period] || first.period}\n` +
+              `----------------------------------\n` +
+              `👥 ทั้งหมด: ${totalCheck} คน\n` +
+              `✅ มา: ${presentTotal} | ❌ ขาด: ${stats.absent}\n` +
+              `🤒 ป่วย: ${stats.sick} | 📝 ลา: ${stats.leave}\n` +
+              `🏠 บ้าน/อื่นๆ: ${stats.home}\n` +
+              `----------------------------------`;
+        break;
+
+      case 'addReport':
+      case 'updateReport':
+        webhookUrl = settings.webhookDormitory;
+        let sickNames = "-";
+        if (first.studentDetails) {
+          try {
+            const details = JSON.parse(first.studentDetails);
+            const sickArr = details.filter(s => s.status === 'sick').map(s => s.name);
+            if (sickArr.length > 0) sickNames = sickArr.join(', ');
+          } catch(e) {}
         }
-      } catch (e) {}
-    }
-    msg = `👨‍🏫 ครูเวร: ${first.reporterName}\n` +
-          `🏠 เรือนนอนที่ดูแล: ${first.dormitory}\n` +
-          `🕰️ ช่วงเวลาเวร: ${first.reportTime || 'ไม่ระบุ'}\n` +
-          `🤒🏥 ป่วย: ${sickList}\n` +
-          `🏡📚 เรียนที่บ้าน: ${homeList}\n\n` +
-          `📊 มา: ${first.presentCount} | ป่วย: ${first.sickCount} | อื่นๆ: ${first.homeCount || 0}\n` +
-          `📘 บันทึก: ${first.log || '-'}`;
-  }
-  else if (action === 'saveAcademicPlan') {
-    webhookUrl = settings.webhookAcademic;
-    msg = `📚 *มีการส่งแผนการจัดการเรียนรู้ใหม่*\n📖 วิชา: ${first.subjectName} (${first.subjectCode})\n👨‍🏫 ผู้สอน: ${first.teacherName}\n📂 กลุ่มสาระ: ${first.learningArea}`;
-  } 
-  else if (action === 'updateAcademicPlanStatus') {
-    webhookUrl = settings.webhookAcademic;
-    msg = `✅ *แผนการสอนได้รับการตรวจสอบ*\n` +
-          `📖 วิชา: ${first.subjectName}\n` +
-          `👨‍🏫 ผู้สอน: ${first.teacherName}\n` +
-          `⭐ สถานะ: ${first.status === 'approved' ? 'อนุมัติแล้ว' : 'รอแก้ไข'}\n` +
-          `🗣️ โดย: ${first.approverName}`;
-  }
-  else if (action === 'saveServiceRecord') {
-    webhookUrl = settings.webhookAcademic;
-    msg = `🏫 *ลงทะเบียนใช้บริการแหล่งเรียนรู้*\n📍 สถานที่: ${first.location}\n📝 กิจกรรม: ${first.purpose}\n👨‍🏫 ผู้รับผิดชอบ: ${first.teacherName}`;
-  }
-  else if (action === 'saveSupplyRequest') {
-    webhookUrl = settings.webhookFinance;
-    msg = `📦 *มีการขอเบิกพัสดุใหม่*\n👤 ผู้ขอ: ${first.requesterName}\n🏢 ฝ่าย: ${first.department}\n📝 เหตุผล: ${first.reason}`;
-  }
-  else if (action === 'saveProjectProposal') {
-    webhookUrl = settings.webhookFinance;
-    msg = `📊 *มีการเสนอโครงการ/แผนงานใหม่*\n📋 โครงการ: ${first.name}\n💰 งบประมาณ: ${Number(first.budget).toLocaleString()} บาท\n👤 ผู้รับผิดชอบ: ${first.responsiblePersonName}`;
-  }
-  else if (action === 'saveMaintenanceRequest') {
-    webhookUrl = settings.webhookGeneral;
-    msg = `🔧 *แจ้งซ่อมบำรุง*\n🛠️ รายการ: ${first.itemName}\n📍 สถานที่: ${first.location}\n👤 ผู้แจ้ง: ${first.requesterName}`;
-  }
-  else if (action === 'saveDocument' || action === 'saveWorkflowDoc') {
-    webhookUrl = settings.webhookGeneral;
-    msg = `📄 *หนังสือราชการ/แฟ้มเสนอใหม่*\n📝 เรื่อง: ${first.title}\n📂 ประเภท: ${first.category || first.type}\n👤 ผู้ส่ง: ${first.submitterName || first.from}`;
-  }
-  else if (action === 'saveHomeVisit') {
-    webhookUrl = settings.webhookStudentSupport;
-    msg = `🏠 *บันทึกการเยี่ยมบ้านนักเรียน*\n👤 นักเรียน: ${first.studentName}\n👨‍🏫 ครูผู้เยี่ยม: ${first.visitorName}`;
-  }
+        // New Prompt Design
+        msg = `📢 *รายงานสถานการณ์ประจำวัน* 📢\n` +
+              `🏢 *หอนอน:* ${first.dormitory}\n` +
+              `📅 *วันที่:* ${first.reportDate} | 🕒 ${first.reportTime || '-'}\n` +
+              `👤 *ผู้รายงาน:* ${first.reporterName}\n` +
+              `➖➖➖➖➖➖➖➖➖➖\n` +
+              `✅ *มาเรียน:* ${first.presentCount} คน\n` +
+              `🤒 *ป่วย:* ${first.sickCount} คน\n` +
+              `🏠 *กลับบ้าน/อื่นๆ:* ${first.homeCount || 0} คน\n` +
+              `➖➖➖➖➖➖➖➖➖➖\n` +
+              `📝 *รายละเอียดเพิ่มเติม:*\n` +
+              `${first.log || '- ไม่มี -'}`;
+        break;
 
-  if (webhookUrl && typeof webhookUrl === 'string' && webhookUrl.trim().startsWith('http') && msg) {
-    try {
-      UrlFetchApp.fetch(webhookUrl.trim(), {
-        method: 'post',
-        contentType: 'application/json',
-        payload: JSON.stringify({ text: msg }),
-        muteHttpExceptions: true
-      });
-    } catch (e) {
-      Logger.log("Webhook Error (" + action + "): " + e.toString());
+      case 'saveAcademicPlan':
+        webhookUrl = settings.webhookAcademic;
+        msg = `📚 *ส่งแผนการจัดการเรียนรู้*\n` +
+              `📖 วิชา: ${first.subjectName} (${first.subjectCode})\n` +
+              `👤 ผู้สอน: ${first.teacherName}\n` +
+              `📂 กลุ่มสาระ: ${first.learningArea}\n` +
+              `📅 วันที่ส่ง: ${first.date}`;
+        break;
+
+      case 'updateAcademicPlanStatus':
+        webhookUrl = settings.webhookAcademic;
+        const statusIcon = first.status === 'approved' ? '✅' : '⚠️';
+        const statusText = first.status === 'approved' ? 'อนุมัติแล้ว' : 'ส่งคืนแก้ไข';
+        msg = `${statusIcon} *ผลการตรวจแผนการสอน*\n` +
+              `📖 วิชา: ${first.subjectName}\n` +
+              `👤 ผู้สอน: ${first.teacherName}\n` +
+              `⭐ ผลการพิจารณา: ${statusText}\n` +
+              `💬 ความเห็น: ${first.comment || '-'}\n` +
+              `ผู้ตรวจ: ${first.approverName}`;
+        break;
+
+      case 'saveServiceRecord':
+        webhookUrl = settings.webhookAcademic;
+        msg = `🏫 *ขอใช้บริการแหล่งเรียนรู้*\n` +
+              `📍 สถานที่: ${first.location}\n` +
+              `📝 กิจกรรม: ${first.purpose}\n` +
+              `👥 จำนวนนักเรียน: ${first.students ? JSON.parse(first.students).length : 0} คน\n` +
+              `👤 ผู้รับผิดชอบ: ${first.teacherName}\n` +
+              `📅 วันที่ใช้: ${first.date} เวลา ${first.time}`;
+        break;
+
+      case 'saveSupplyRequest':
+        webhookUrl = settings.webhookFinance;
+        msg = `📦 *ขอจัดซื้อ/จัดจ้างพัสดุ*\n` +
+              `📝 เรื่อง: ${first.subject}\n` +
+              `👤 ผู้ขอ: ${first.requesterName}\n` +
+              `🏢 ฝ่าย/งาน: ${first.department}\n` +
+              `💰 ยอดรวม: ${Number(first.totalPrice).toLocaleString()} บาท\n` +
+              `📅 วันที่: ${first.docDate}`;
+        break;
+
+      case 'saveProjectProposal':
+        webhookUrl = settings.webhookFinance;
+        msg = `📊 *เสนอโครงการใหม่*\n` +
+              `📋 โครงการ: ${first.name}\n` +
+              `💰 งบประมาณ: ${Number(first.budget).toLocaleString()} บาท\n` +
+              `👤 ผู้รับผิดชอบ: ${first.responsiblePersonName}\n` +
+              `📅 ปีงบประมาณ: ${first.fiscalYear}`;
+        break;
+
+      case 'saveMaintenanceRequest':
+        webhookUrl = settings.webhookGeneral;
+        msg = `🔧 *แจ้งซ่อมบำรุง*\n` +
+              `🛠️ รายการ: ${first.itemName}\n` +
+              `⚠️ อาการ: ${first.description}\n` +
+              `📍 สถานที่: ${first.location}\n` +
+              `👤 ผู้แจ้ง: ${first.requesterName}`;
+        break;
+
+      case 'saveDocument':
+      case 'saveWorkflowDoc':
+        webhookUrl = settings.webhookGeneral;
+        const docStatus = first.status === 'proposed' || first.status === 'pending' ? 'รอพิจารณา' : (first.status === 'approved' || first.status === 'endorsed' ? 'อนุมัติ/ลงนามแล้ว' : first.status);
+        msg = `📄 *หนังสือราชการ/บันทึกข้อความ*\n` +
+              `📝 เรื่อง: ${first.title}\n` +
+              `📂 ประเภท: ${first.category || first.type}\n` +
+              `👤 ผู้ส่ง: ${first.submitterName || first.from}\n` +
+              `⭐ สถานะ: ${docStatus}`;
+        break;
+
+      case 'saveHomeVisit':
+        webhookUrl = settings.webhookStudentSupport;
+        msg = `🏠 *บันทึกการเยี่ยมบ้าน*\n` +
+              `👤 นักเรียน: รหัส ${first.studentId}\n` +
+              `👨‍🏫 ครูผู้เยี่ยม: ${first.visitorName}\n` +
+              `📅 วันที่: ${first.date}\n` +
+              `📍 สถานที่: ${first.locationName}`;
+        break;
+        
+      case 'saveLeaveRecord':
+        webhookUrl = settings.webhookGeneral; 
+        msg = `📝 *ขออนุญาตลา (${first.type})*\n` +
+              `👤 ชื่อ: ${first.personnelName}\n` +
+              `📅 ลาวันที่: ${first.startDate} ถึง ${first.endDate}\n` +
+              `⏱️ รวม: ${first.daysCount} วัน\n` +
+              `เหตุผล: ${first.reason}`;
+        break;
+        
+      case 'saveConstructionRecord':
+        webhookUrl = settings.webhookGeneral;
+        msg = `🏗️ *อัปเดตงานก่อสร้าง*\n` +
+              `📋 โครงการ: ${first.projectName}\n` +
+              `🚧 ความคืบหน้า: ${first.progress}%\n` +
+              `👷 ผู้รับเหมา: ${first.contractor}\n` +
+              `📝 รายละเอียดงาน: ${first.description || '-'}`;
+        break;
     }
+
+    if (webhookUrl && webhookUrl.trim().startsWith('http') && msg) {
+      // Use a fire-and-forget approach or simple error logging
+      try {
+        sendToGoogleChat(webhookUrl.trim(), msg);
+      } catch (e) {
+        Logger.log("Failed to send chat notification: " + e.toString());
+      }
+    }
+  } catch (e) {
+    Logger.log("Error in triggerNotification: " + e.toString());
   }
 }
 
@@ -448,6 +523,7 @@ function routeGenericAction(action, request, uploadFolder) {
     if (records.length > 0) ensureHeadersExist(sheet, records[0]);
     const results = records.map(r => saveRecord(sheet, r, uploadFolder));
 
+    // Fix: Ensure we read settings properly to get the webhook URL
     const settingsList = readSheet(getSheet(SHEET_NAMES.SETTINGS));
     if (settingsList.length > 0) {
       triggerNotification(action, results, settingsList[0]);
